@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sierra Leone Connect — Love from Salone to everywhere</title>
+<meta name="description" content="The dating app for Sierra Leoneans everywhere. Meet people who share your roots — in Freetown, London, DC, Toronto and beyond.">
+<meta name="theme-color" content="#07110D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SL Connect">
+<meta property="og:title" content="Sierra Leone Connect">
+<meta property="og:description" content="Meet Sierra Leoneans from Freetown to everywhere.">
+<meta property="og:image" content="icons/og.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1.2.0">
+</head>
+<body>
+<noscript><p style="padding:20px">Sierra Leone Connect needs JavaScript turned on.</p></noscript>
+
+<!-- Landing + login (shown when signed out) -->
+<div id="landing" class="landing hidden">
+  <div class="flagbar"></div>
+  <nav class="land-nav">
+    <span class="logo"><span class="logo-mark" aria-hidden="true"></span> Sierra Leone Connect</span>
+    <button class="btn btn-ghost btn-sm" data-goto="login">Log in</button>
+  </nav>
+  <main class="land-wrap">
+    <section class="hero">
+      <span class="kicker">🇸🇱 Made for Salone people everywhere</span>
+      <h1>Find your person — <em>from Freetown to everywhere.</em></h1>
+      <p class="lead">Meet Sierra Leoneans who share your roots, your faith and your plans for the future — whether you're in Bo, Baltimore, London or Toronto.</p>
+      <div class="row" style="max-width:420px">
+        <button class="btn btn-primary" data-goto="signup">Create free account</button>
+        <button class="btn btn-ghost" data-goto="login">I have an account</button>
+      </div>
+      <div class="hero-stats">
+        <div><b>16</b><span>districts represented</span></div>
+        <div><b>30+</b><span>diaspora cities</span></div>
+        <div><b>18+</b><span>verified adults only</span></div>
+      </div>
+      <div class="globe-row" aria-label="Where members live">
+        <span class="tag">🇸🇱 Freetown</span><span class="tag">🇬🇧 London</span><span class="tag">🇺🇸 DMV</span><span class="tag">🇺🇸 Atlanta</span><span class="tag">🇨🇦 Toronto</span><span class="tag">🇺🇸 Minneapolis</span><span class="tag">🇬🇭 Accra</span><span class="tag">🇩🇪 Berlin</span>
+      </div>
+    </section>
+
+    <section class="auth-card" id="auth" aria-label="Log in or sign up">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-login" aria-selected="true">Log in</button>
+        <button role="tab" id="tab-signup" aria-selected="false">Sign up</button>
+      </div>
+      <form id="form-login" novalidate>
+        <label class="field"><span>Email</span><input class="input" type="email" name="email" autocomplete="email" required></label>
+        <label class="field"><span>Password</span><input class="input" type="password" name="password" autocomplete="current-password" required></label>
+        <div class="err" id="login-err" role="alert"></div>
+        <button class="btn btn-primary btn-block" type="submit">Log in</button>
+        <p class="fine"><button type="button" class="link" id="forgot">Forgot password?</button></p>
+      </form>
+      <form id="form-signup" class="hidden" novalidate>
+        <label class="field"><span>Email</span><input class="input" type="email" name="email" autocomplete="email" required></label>
+        <label class="field"><span>Password (8+ characters)</span><input class="input" type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+        <label class="field"><span>Date of birth</span><input class="input" type="date" name="dob" required></label>
+        <label class="switch-row" style="border:0;padding:4px 0 12px"><span style="font-size:13.5px;color:var(--muted)">I'm 18+ and agree to the <a href="#terms" class="link">Terms</a> &amp; <a href="#privacy" class="link">Privacy Policy</a>. I'll treat everyone with respect.</span><span class="toggle"><input type="checkbox" name="agree" required><span></span></span></label>
+        <div class="err" id="signup-err" role="alert"></div>
+        <button class="btn btn-primary btn-block" type="submit">Create account</button>
+      </form>
+      <div id="demo-note" class="demo-note hidden">Demo mode — sample members are illustrations, data stays on this device. Connect Supabase in <code>js/config.js</code> to go live.</div>
+    </section>
+  </main>
+
+  <section class="features" aria-label="Why Sierra Leone Connect">
+    <div class="feature"><div class="ic">🧭</div><h3>Connect Score</h3><p>See exactly why you match — same district, shared language, faith, interests and relationship goals.</p></div>
+    <div class="feature"><div class="ic">💬</div><h3>No awkward first message</h3><p>Openers built from what you actually share, plus Krio icebreakers that get real conversations going.</p></div>
+    <div class="feature"><div class="ic">🛡️</div><h3>Scam Shield</h3><p>Messages asking for money, gift cards or off-app contact are flagged instantly and reviewed by our team.</p></div>
+    <div class="feature"><div class="ic">✅</div><h3>Verified profiles</h3><p>Selfie verification and human moderators keep the community real, respectful and 18+.</p></div>
+    <div class="feature"><div class="ic">🌍</div><h3>Home or abroad</h3><p>Browse worldwide, near you, in Salone, or across the diaspora — love no get border.</p></div>
+    <div class="feature"><div class="ic">💍</div><h3>Intent first</h3><p>Marriage-minded, long-term, open or friends — matched with people who want the same thing.</p></div>
+  </section>
+  <footer class="land-foot">
+    <a href="#safety" class="js-info">Safety</a><a href="terms.html">Terms</a><a href="privacy.html">Privacy</a><a href="child-safety.html">Child safety</a><a href="delete-account.html">Delete account</a><a href="admin.html">Staff</a>
+    <p>© <span id="yr"></span> Sierra Leone Connect</p>
+  </footer>
+</div>
+
+<!-- Onboarding and main app mount here -->
+<div id="root"></div>
+
+<script type="module" src="js/app.js?v=1.2.0"></script>
+</body>
+</html>

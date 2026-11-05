@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Delete your account · Sierra Leone Connect</title>
+<meta name="theme-color" content="#07110D">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css?v=1.2.0">
+<link rel="stylesheet" href="css/legal.css?v=1.2.0">
+</head>
+<body>
+<div class="flagbar"></div>
+<main class="legal">
+<a href="index.html" class="logo" style="text-decoration:none;color:inherit"><span class="logo-mark" aria-hidden="true"></span> Sierra Leone Connect</a>
+
+<h1>Delete your account</h1>
+<p>You can delete your Sierra Leone Connect account here without installing the app. This permanently erases your profile, photos, voice recordings, compatibility answers, likes, matches and messages. It cannot be undone.</p>
+<div class="box">
+<p style="margin-top:0"><b>In the app:</b> Profile → Delete account.</p>
+<p style="margin-bottom:0"><b>Here:</b> sign in below and confirm.</p>
+</div>
+<form id="del" class="auth-card" style="max-width:420px;margin:18px 0" novalidate>
+  <label class="field"><span>Email</span><input class="input" name="email" type="email" autocomplete="username" required></label>
+  <label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+  <label class="field"><span>Type DELETE to confirm</span><input class="input" name="confirm" autocomplete="off" required></label>
+  <div class="err" id="del-err" role="alert"></div>
+  <button class="btn btn-danger btn-block" type="submit">Delete my account permanently</button>
+  <p class="fine">Can't sign in? Email <a data-cfg="support" href="#">support</a> from the address on your account and we will delete it within 30 days.</p>
+</form>
+<div id="del-done" class="box hidden"><b>Your account has been deleted.</b> We're sorry to see you go.</div>
+<p class="meta">We keep only a minimal anonymous moderation record (to enforce bans) as described in our <a href="privacy.html">privacy policy</a>.</p>
+<script type="module" src="js/delete-account.js?v=1.2.0"></script>
+<nav><a href="privacy.html">Privacy</a><a href="terms.html">Terms &amp; community rules</a><a href="child-safety.html">Child safety</a><a href="delete-account.html">Delete account</a><a href="index.html">Open the app</a></nav>
+<p class="meta">© <span data-year></span> <span data-cfg="operator">Sierra Leone Connect</span></p>
+</main>
+<script type="module" src="js/legal.js?v=1.2.0"></script>
+</body>
+</html>

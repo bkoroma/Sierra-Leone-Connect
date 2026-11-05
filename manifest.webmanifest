@@ -1,0 +1,19 @@
+{
+  "name": "Sierra Leone Connect",
+  "short_name": "SL Connect",
+  "description": "The dating app for Sierra Leoneans everywhere.",
+  "id": "./",
+  "start_url": "./index.html#/discover",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#07110D",
+  "theme_color": "#07110D",
+  "categories": ["social", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

@@ -1,0 +1,63 @@
+# Sierra Leone Connect — Render static site (free plan, global CDN, automatic HTTPS)
+services:
+  - type: web
+    runtime: static
+    name: sierra-leone-connect
+    buildCommand: bash scripts/render-build.sh
+    staticPublishPath: ./dist
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(self), geolocation=(self), microphone=(self), payment=(), usb=()
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' data: blob: https://*.supabase.co wss://*.supabase.co; media-src 'self' data: blob: https://*.supabase.co; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+      - path: /*.html
+        name: Cache-Control
+        value: no-cache
+      - path: /
+        name: Cache-Control
+        value: no-cache
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
+      - path: /js/*
+        name: Cache-Control
+        value: public, max-age=3600
+      - path: /css/*
+        name: Cache-Control
+        value: public, max-age=3600
+      - path: /icons/*
+        name: Cache-Control
+        value: public, max-age=2592000
+      - path: /admin.html
+        name: X-Robots-Tag
+        value: noindex, nofollow
+      - path: /superadmin.html
+        name: X-Robots-Tag
+        value: noindex, nofollow
+      - path: /admin.html
+        name: Cache-Control
+        value: no-store
+      - path: /superadmin.html
+        name: Cache-Control
+        value: no-store
+      - path: /manifest.webmanifest
+        name: Content-Type
+        value: application/manifest+json
