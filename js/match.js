@@ -11,10 +11,18 @@ const INTENT_COMPAT = {
   friends: { marriage: 0, serious: 0.1, open: 0.4, friends: 1 }
 };
 
-export const defaultPrefs = () => ({ ageMin: 21, ageMax: 45, seeking: [], mode: 'worldwide', maxKm: 100, faithMatters: false, sameIntentOnly: false });
+// Default age window is centred on the member's own age (8 younger … 10 older), so a 50-year-old
+// sees peers by default instead of a fixed 21–45 range.
+export const defaultPrefs = (age = 30) => {
+  const a = Number.isFinite(age) && age >= 18 ? age : 30;
+  return { ageMin: Math.max(18, a - 8), ageMax: Math.min(80, Math.max(a + 10, 25)), seeking: [], mode: 'worldwide', maxKm: 100, faithMatters: false, sameIntentOnly: false };
+};
+// What a member's filters actually are: saved values win, missing ones fall back to the defaults.
+export const fullPrefs = p => ({ ...defaultPrefs(ageOf(p?.dob)), ...Object.fromEntries(Object.entries(p?.prefs || {}).filter(([, v]) => v != null)) });
+export const PASS_RESURFACE_DAYS = 30;
 
 const seeks = (a, b) => !a.prefs?.seeking?.length || a.prefs.seeking.includes(b.gender);
-const inAge = (a, b) => { const x = ageOf(b.dob); const p = a.prefs || {}; return x != null && x >= (p.ageMin ?? 18) && x <= (p.ageMax ?? 99); };
+const inAge = (a, b) => { const x = ageOf(b.dob); const p = fullPrefs(a); return x != null && x >= p.ageMin && x <= p.ageMax; };
 
 export function eligible(me, them, mode = me.prefs?.mode || 'worldwide') {
   if (!them || them.id === me.id) return false;

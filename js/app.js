@@ -2,7 +2,7 @@
 import { getApi } from './data/index.js';
 import { $, $$, h, raw, esc, safeImg, ageOf, timeAgo, isOnline, fmtKm, toast, resizeImage, todayKey, scamCheck } from './util.js';
 import { DISTRICTS, HERITAGE, FAITHS, LANGUAGES, INTENTS, intentById, INTERESTS, PROMPTS, CITIES, flagOf, REPORT_REASONS, DECK_MODES, ICEBREAKERS, QUESTIONS, Q_CATS, IMPORTANCE, qById, THIS_OR_THAT } from './constants.js';
-import { rankDeck, score, completeness, openers, defaultPrefs } from './match.js';
+import { rankDeck, score, completeness, openers, defaultPrefs, fullPrefs } from './match.js';
 import { I } from './icons.js';
 import { COUNTRIES } from './geo-data.js';
 import { detectLocation, USERNAME_RE, normalizeUsername } from './geo.js';
@@ -169,7 +169,7 @@ const STEPS = ['basics', 'roots', 'location', 'intent', 'interests', 'questions'
 
 function onboarding(stepIdx = 0) {
   document.body.classList.add('in-app');
-  const o = { ...me, languages: me.languages?.length ? me.languages : ['Krio', 'English'], interests: me.interests || [], prompts: me.prompts?.length ? me.prompts : [{ q: PROMPTS[0], a: '' }, { q: PROMPTS[1], a: '' }, { q: PROMPTS[3], a: '' }], photos: me.photos || [], prefs: me.prefs || defaultPrefs() };
+  const o = { ...me, languages: me.languages?.length ? me.languages : ['Krio', 'English'], interests: me.interests || [], prompts: me.prompts?.length ? me.prompts : [{ q: PROMPTS[0], a: '' }, { q: PROMPTS[1], a: '' }, { q: PROMPTS[3], a: '' }], photos: me.photos || [], prefs: fullPrefs(me) };
   let i = stepIdx;
   const render = () => {
     $('#root').innerHTML = `<div class="onb"><div class="onb-top"><span class="logo"><span class="logo-mark"></span>Sierra Leone Connect</span><div class="onb-progress">${STEPS.map((_, k) => `<i class="${k <= i ? 'on' : ''}"></i>`).join('')}</div></div><div class="onb-body" id="onb-body"></div><div class="onb-foot">${i > 0 ? '<button class="btn btn-ghost" id="onb-back">Back</button>' : ''}<button class="btn btn-primary" style="flex:1" id="onb-next">${i === STEPS.length - 1 ? 'Start matching 🎉' : 'Continue'}</button></div></div>`;
@@ -207,7 +207,7 @@ const opts = (list, v) => list.map(x => h`<option ${x === v ? 'selected' : ''}>$
 const STEP = {
   basics: {
     render(el, o) {
-      o.prefs = o.prefs || defaultPrefs();
+      o.prefs = fullPrefs(o);
       if (!o.prefs.seeking?.length && o.gender) o.prefs.seeking = [o.gender === 'man' ? 'woman' : 'man']; // sensible default from sign-up gender
       el.innerHTML = h`<h1>Let's start with you</h1><p class="sub">Members see your username${o.username ? h` (@${o.username})` : ''} — your name stays private.</p>
         <label class="field"><span>First name (private)</span><input class="input" id="f-name" maxlength="30" value="${o.name || ''}" autocomplete="given-name"></label>
@@ -881,7 +881,7 @@ async function renderMe() {
       <button class="list-btn" id="me-verify"><span>${raw(I.shield.replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"'))} Photo verification<br><small>${vs === 'approved' ? '✓ You are verified' : vs === 'pending' ? 'In review — usually within 24h' : vs === 'rejected' ? 'Not approved — try again with a clear selfie' : 'Get the blue check and 2× more matches'}</small></span><span>›</span></button>
       <button class="list-btn" id="me-safety"><span>Safety centre<br><small>Dating safely, spotting scams</small></span><span>›</span></button></section>
     <section class="card-sec"><h3>Settings</h3>
-      <button class="list-btn" id="me-prefs"><span>Discovery filters<br><small>Ages ${me.prefs?.ageMin}–${me.prefs?.ageMax} · ${(me.prefs?.seeking || []).map(x => x === 'woman' ? 'Women' : 'Men').join(' & ')}</small></span><span>›</span></button>
+      <button class="list-btn" id="me-prefs"><span>Discovery filters<br><small>Ages ${fullPrefs(me).ageMin}–${fullPrefs(me).ageMax} · ${(fullPrefs(me).seeking || []).map(x => x === 'woman' ? 'Women' : 'Men').join(' & ') || 'Everyone'}</small></span><span>›</span></button>
       <label class="switch-row"><span>Pause my profile<small>Hide from Discover. Your matches stay.</small></span><span class="toggle"><input type="checkbox" id="me-pause" ${me.paused ? 'checked' : ''}><span></span></span></label>
       <button class="list-btn" id="me-out">Log out</button>
       <button class="list-btn" id="me-del" style="color:#FF8A8A">Delete account</button></section>
@@ -913,7 +913,7 @@ function editSheet(step) {
   const o = JSON.parse(JSON.stringify(me));
   o.prompts = o.prompts?.length ? o.prompts : [{ q: PROMPTS[0], a: '' }, { q: PROMPTS[1], a: '' }, { q: PROMPTS[3], a: '' }];
   while (o.prompts.length < 3) o.prompts.push({ q: PROMPTS.find(q => !o.prompts.some(p => p.q === q)), a: '' });
-  o.languages ||= []; o.interests ||= []; o.photos ||= []; o.prefs ||= defaultPrefs();
+  o.languages ||= []; o.interests ||= []; o.photos ||= []; o.prefs = fullPrefs(o);
   const sh = openSheet(`<div class="onb-body" id="ed"></div><div class="onb-foot"><button class="btn btn-ghost" id="ed-c">Cancel</button><button class="btn btn-primary" style="flex:1" id="ed-s">Save</button></div>`);
   STEP[step].render($('#ed', sh), o);
   $('#ed-c', sh).onclick = closeSheet;
@@ -924,7 +924,7 @@ function editSheet(step) {
 }
 
 function prefsSheet() {
-  const p = { ...defaultPrefs(), ...(me.prefs || {}) };
+  const p = fullPrefs(me);
   p.seeking = [...(p.seeking || [])];
   const sh = openSheet(h`<div class="pad"><h2 style="font-family:var(--display);margin:4px 0 14px">Discovery filters</h2>
     <div class="field"><span>Show me</span><div class="chips" id="pf-s">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${p.seeking.includes(g)}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>

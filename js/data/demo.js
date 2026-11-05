@@ -3,7 +3,7 @@
 import { seedProfiles, avatarSVG } from './seed.js';
 import { DEFAULT_SETTINGS, BOT_REPLIES, REPORT_REASONS, qById, THIS_OR_THAT, PROMPTS } from '../constants.js';
 import { uid, sha256, todayKey, scamCheck, ageOf } from '../util.js';
-import { completeness, eligible, qMatch } from '../match.js';
+import { completeness, eligible, qMatch, PASS_RESURFACE_DAYS } from '../match.js';
 
 const KEY = 'slc_db_v2', SESS = 'slc_session_v1';
 const DEMO_STAFF = [
@@ -88,6 +88,7 @@ const publicProfile = (p, meId = session()?.uid) => {
   return { ...rest, name: p.username || p.name, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
 };
 const DAY = 864e5, EXPIRY = 7 * DAY;
+const passExpired = s => s.kind === 'pass' && Date.now() - new Date(s.at) > PASS_RESURFACE_DAYS * DAY;
 const supersAllowed = p => db.settings.dailySuperLikes + (p?.qotdDay === todayKey() ? 1 : 0);
 const msgText = m => m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'game' ? `🎲 This or That: ${m.meta.a} or ${m.meta.b}?` : m.kind === 'game_ans' ? '🎲 Picked an answer' : m.body;
 const BOT_COMMENTS = ['Your answer made me laugh 😂 we need to talk', 'Okay this is a green flag 🙌', 'Cassava leaf is the correct answer, no debate 😄', 'You seem genuinely kind — kushɛ!'];
@@ -217,7 +218,7 @@ export const demo = {
   },
   async deck(mode) {
     const u = requireUser(); const me = db.profiles[u.id];
-    const swiped = new Set(db.swipes.filter(s => s.from === u.id).map(s => s.to));
+    const swiped = new Set(db.swipes.filter(s => s.from === u.id && !passExpired(s)).map(s => s.to)); // passes come back after 30 days
     const out = [], likedMe = [];
     for (const p of Object.values(db.profiles)) {
       if (p.staff || p.paused || !p.onboarded && !p.bot) continue;
@@ -235,6 +236,8 @@ export const demo = {
     if (!['like', 'pass', 'super'].includes(kind)) throw new Error('Bad swipe.');
     const t = db.profiles[targetId];
     if (!t || !active(targetId)) throw new Error('This profile is no longer available.');
+    // Same hard filters as the deck (gender/age both ways, dealbreakers, faith/goal toggles) — a like can't bypass them.
+    if (kind !== 'pass' && !eligible(db.profiles[u.id], t, 'worldwide')) throw new Error('This profile is no longer available.');
     if (kind === 'like' && todays(u.id, 'like') >= db.settings.dailyLikes) throw Object.assign(new Error('You\'ve used today\'s likes. They refresh at midnight ✨'), { code: 'quota' });
     if (kind === 'super' && todays(u.id, 'super') >= supersAllowed(db.profiles[u.id])) throw Object.assign(new Error('No Oya! likes left today.'), { code: 'quota' });
     db.swipes = db.swipes.filter(s => !(s.from === u.id && s.to === targetId));
@@ -269,7 +272,7 @@ export const demo = {
   },
   async likesYou() {
     const u = requireUser(); const me = db.profiles[u.id];
-    const swiped = new Set(db.swipes.filter(s => s.from === u.id).map(s => s.to));
+    const swiped = new Set(db.swipes.filter(s => s.from === u.id && !passExpired(s)).map(s => s.to)); // passes come back after 30 days
     return Object.values(db.profiles)
       .filter(p => !p.staff && !swiped.has(p.id) && active(p.id) && !blockedBetween(u.id, p.id) && likesMe(u.id, p) && eligible(me, p, 'worldwide'))
       .map(p => {
