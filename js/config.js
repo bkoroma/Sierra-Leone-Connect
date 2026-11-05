@@ -14,5 +14,5 @@ export const CONFIG = {
   SUPPORT_EMAIL: 'support@slconnect.app',   // ← set to a real inbox you monitor (shown in policies + Play listing)
   SAFETY_EMAIL: 'safety@slconnect.app',     // ← child-safety point of contact required by Google Play
   OPERATOR: 'Sierra Leone Connect',          // ← legal name of who runs the app (you or your company)
-  VERSION: '1.2.0'
+  VERSION: '1.3.0'
 };

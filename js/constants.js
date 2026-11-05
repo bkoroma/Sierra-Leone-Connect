@@ -1,3 +1,4 @@
+import { COUNTRIES } from './geo-data.js';
 // Sierra Leone Connect — shared vocabulary
 export const APP_NAME = 'Sierra Leone Connect';
 
@@ -124,7 +125,8 @@ export const COUNTRY_FLAGS = {
   Nigeria: '🇳🇬', Liberia: '🇱🇷', Guinea: '🇬🇳', Gambia: '🇬🇲', 'United Arab Emirates': '🇦🇪',
   Australia: '🇦🇺', China: '🇨🇳'
 };
-export const flagOf = c => COUNTRY_FLAGS[c] || '🌍';
+const flagFromCode = c => /^[A-Z]{2}$/.test(c || '') ? String.fromCodePoint(...[...c].map(ch => 127397 + ch.charCodeAt(0))) : '';
+export const flagOf = c => COUNTRY_FLAGS[c] || flagFromCode((COUNTRIES.find(x => x[1] === c) || [])[0]) || '🌍';
 
 export const REPORT_REASONS = [
   'Asking for money / scam', 'Fake profile or photos', 'Harassment or hate', 'Inappropriate content',

@@ -82,7 +82,7 @@ const blockedBetween = (a, b) => db.blocks.some(x => (x.by === a && x.target ===
 const active = id => db.users[id]?.status === 'active';
 const publicProfile = (p, meId = session()?.uid) => {
   if (!p) return p;
-  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, ...rest } = p;
+  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, ...rest } = p;
   const me = meId && db.profiles[meId];
   return { ...rest, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
 };
@@ -122,15 +122,25 @@ export const demo = {
   async init() { load(); await seedStaff(); },
 
   // ---------- Auth ----------
-  async signUp({ email, password }) {
+  async usernameAvailable(u) {
+    load(); u = String(u || '').trim().toLowerCase();
+    return !Object.values(db.profiles).some(p => (p.username || '').toLowerCase() === u);
+  },
+  async signUp({ email, password, dob, firstName, lastName, username, country, city, lat, lng }) {
     load();
     email = String(email).trim().toLowerCase();
+    username = String(username || '').trim().toLowerCase();
+    if (!/^(?![._])(?!.*[._]$)(?!.*[._]{2})[a-z0-9._]{3,20}$/.test(username)) throw new Error('Choose a valid username.');
+    if (!(await demo.usernameAvailable(username))) throw new Error(`@${username} is taken — try another.`);
+    if (!dob || ageOf(dob) < db.settings.minAge) throw new Error(`You must be ${db.settings.minAge}+ to use Sierra Leone Connect.`);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Enter a valid email.');
     if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
     if (Object.values(db.users).some(u => u.email === email)) throw new Error('An account with this email already exists.');
     const id = uid(), salt = uid();
     db.users[id] = { id, email, salt, pw: await sha256(salt + password), role: 'user', status: 'active', createdAt: new Date().toISOString() };
-    db.profiles[id] = { id, photos: [], interests: [], languages: [], prompts: [], createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), verificationStatus: 'none' };
+    db.profiles[id] = { id, name: String(firstName || '').trim().slice(0, 30), lastName: String(lastName || '').trim().slice(0, 40), username, dob,
+      country: country || '', city: city || '', lat: lat ?? null, lng: lng ?? null,
+      photos: [], interests: [], languages: [], prompts: [], createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), verificationStatus: 'none' };
     audit(id, 'signup', id); save();
     localStorage.setItem(SESS, JSON.stringify({ uid: id, at: Date.now() }));
     return { id, email, role: 'user' };
@@ -372,7 +382,7 @@ export const demo = {
     async users(q = '') {
       requireStaff(); q = q.trim().toLowerCase();
       return Object.values(db.users).map(u => ({ ...u, pw: undefined, salt: undefined, profile: db.profiles[u.id] }))
-        .filter(u => !q || u.email.includes(q) || (u.profile?.name || '').toLowerCase().includes(q) || (u.profile?.city || '').toLowerCase().includes(q))
+        .filter(u => !q || u.email.includes(q) || [u.profile?.name, u.profile?.lastName, u.profile?.username, u.profile?.city].some(v => (v || '').toLowerCase().includes(q)))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
     },
     async setStatus(id, status, reason = '') {

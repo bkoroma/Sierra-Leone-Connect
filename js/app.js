@@ -4,8 +4,11 @@ import { $, $$, h, raw, esc, safeImg, ageOf, timeAgo, isOnline, fmtKm, toast, re
 import { DISTRICTS, HERITAGE, FAITHS, LANGUAGES, INTENTS, intentById, INTERESTS, PROMPTS, CITIES, flagOf, REPORT_REASONS, DECK_MODES, ICEBREAKERS, QUESTIONS, Q_CATS, IMPORTANCE, qById, THIS_OR_THAT } from './constants.js';
 import { rankDeck, score, completeness, openers, defaultPrefs } from './match.js';
 import { I } from './icons.js';
+import { COUNTRIES } from './geo-data.js';
+import { detectLocation, USERNAME_RE, normalizeUsername } from './geo.js';
+import { debounce } from './util.js';
 
-let api, session, me, settings;
+let api, session, me, settings, autoLocateRef = () => {};
 const S = { mode: localStorage.getItem('slc_mode') || 'worldwide', deck: [], deckLoaded: false, lastSwiped: null, likes: [], matches: [], unread: 0, likeCount: 0, chatUnsub: null };
 
 const bg = u => `background-image:url("${safeImg(u).replace(/["'()\\\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))}")`;
@@ -48,8 +51,8 @@ function bindLanding() {
     $('#form-signup').classList.toggle('hidden', t !== 'signup');
   };
   $('#tab-login').onclick = () => setTab('login');
-  $('#tab-signup').onclick = () => setTab('signup');
-  $$('[data-goto]').forEach(b => b.onclick = () => { setTab(b.dataset.goto); $('#auth').scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => $(`#form-${b.dataset.goto} input`).focus(), 350); });
+  $('#tab-signup').onclick = () => { setTab('signup'); autoLocate(); };
+  $$('[data-goto]').forEach(b => b.onclick = () => { setTab(b.dataset.goto); if (b.dataset.goto === 'signup') autoLocate(); $('#auth').scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => $(`#form-${b.dataset.goto} input`).focus(), 350); });
   $$('.js-info').forEach(a => a.onclick = e => { e.preventDefault(); infoSheet(a.getAttribute('href').slice(1)); });
 
   $('#form-login').onsubmit = async e => {
@@ -68,21 +71,66 @@ function bindLanding() {
     if (!email) { $('#login-err').textContent = 'Enter your email above first.'; return; }
     try { const r = await api.resetPassword(email); toast(r?.note || 'Check your email for a reset link.'); } catch (err) { $('#login-err').textContent = err.message; }
   };
+  // ── Sign-up: names, unique username, auto-detected country ──
+  const sel = $('#su-country');
+  sel.insertAdjacentHTML('beforeend', COUNTRIES.map(([code, name]) => h`<option value="${name}" data-code="${code}">${flagOf(name)} ${name}</option>`).join(''));
+  const geo = { lat: null, lng: null, city: '' };
+  let located = false;
+  const geoHint = $('#su-geo-hint');
+  async function autoLocate(force = false) {
+    if (located && !force) return; located = true;
+    geoHint.textContent = '📍 Detecting your location…'; geoHint.className = 'hint';
+    const r = await detectLocation();
+    Object.assign(geo, { lat: r.lat, lng: r.lng, city: r.city || '' });
+    if (r.country && [...sel.options].some(o => o.value === r.country)) sel.value = r.country;
+    geoHint.innerHTML = r.country
+      ? h`${r.source === 'timezone' ? '🕑 Guessed from your time zone' : '📍 Detected'}: ${r.city ? r.city + ', ' : ''}${r.country}. <button type="button" class="link" id="su-geo">Detect again</button>`.toString()
+      : h`Couldn't detect your location — please choose your country. <button type="button" class="link" id="su-geo">Try again</button>`.toString();
+    geoHint.className = 'hint' + (r.country ? ' ok' : '');
+    $('#su-geo').onclick = () => autoLocate(true);
+  }
+  autoLocateRef = autoLocate;
+  $('#su-geo').onclick = () => autoLocate(true);
+  sel.onchange = () => { geo.city = ''; geo.lat = geo.lng = null; geoHint.textContent = 'Country set manually.'; geoHint.className = 'hint'; };
+
+  const uIn = $('#form-signup [name=username]'), uHint = $('#su-user-hint');
+  let userOk = false;
+  const checkUser = debounce(async () => {
+    const u = normalizeUsername(uIn.value);
+    if (uIn.value !== u) uIn.value = u;
+    userOk = false;
+    if (!u) { uHint.textContent = '3–20 letters, numbers, dots or underscores.'; uHint.className = 'hint'; return; }
+    if (!USERNAME_RE.test(u)) { uHint.textContent = 'Use 3–20 letters, numbers, single dots or underscores (not at the start or end).'; uHint.className = 'hint bad'; return; }
+    try {
+      const free = await api.usernameAvailable(u);
+      if (normalizeUsername(uIn.value) !== u) return;
+      userOk = free;
+      uHint.textContent = free ? `✓ @${u} is available` : `@${u} is taken — try another.`;
+      uHint.className = 'hint ' + (free ? 'ok' : 'bad');
+    } catch { uHint.textContent = ''; }
+  }, 350);
+  uIn.oninput = checkUser;
+
   $('#form-signup').onsubmit = async e => {
     e.preventDefault();
     const f = new FormData(e.target), btn = e.target.querySelector('[type=submit]');
     const err = $('#signup-err'); err.textContent = '';
-    const dob = f.get('dob');
+    const firstName = String(f.get('firstName') || '').trim(), lastName = String(f.get('lastName') || '').trim();
+    const username = normalizeUsername(f.get('username')), country = f.get('country'), dob = f.get('dob');
+    if (firstName.length < 2) { err.textContent = 'Enter your first name.'; return; }
+    if (lastName.length < 2) { err.textContent = 'Enter your last name.'; return; }
+    if (!USERNAME_RE.test(username)) { err.textContent = 'Choose a valid username.'; return; }
+    if (!country) { err.textContent = 'Choose your country.'; return; }
     if (!dob || ageOf(dob) < (settings.minAge || 18)) { err.textContent = `You must be ${settings.minAge || 18} or older to join.`; return; }
     if (!f.get('agree')) { err.textContent = 'Please confirm you are 18+ and agree to the terms.'; return; }
     btn.disabled = true;
     try {
-      await api.signUp({ email: f.get('email'), password: f.get('password'), dob });
+      if (!(await api.usernameAvailable(username))) { err.textContent = `@${username} is taken — try another.`; btn.disabled = false; return; }
+      await api.signUp({ email: f.get('email'), password: f.get('password'), dob, firstName, lastName, username, country, city: geo.city, lat: geo.lat, lng: geo.lng });
       session = await api.session();
       if (!session) { err.textContent = ''; toast('Check your email to confirm your account, then log in.'); setTab('login'); btn.disabled = false; return; }
-      await api.saveProfile({ dob });
       await enter();
-    } catch (x) { err.textContent = x.message; }
+    } catch (x) { err.textContent = /database error/i.test(x.message) ? 'We couldn\'t create your account — that username may have just been taken. Try another.' : x.message; }
     btn.disabled = false;
   };
 }
@@ -188,13 +236,14 @@ const STEP = {
         <label class="field"><span>Search city</span><input class="input" id="f-cq" placeholder="Freetown, London, Silver Spring…"></label>
         <div class="city-list" id="f-cities"></div>
         <details style="margin-top:14px"><summary class="link" style="cursor:pointer">My city isn't listed</summary>
-          <div class="row" style="margin-top:10px"><input class="input" id="f-oc" placeholder="City" maxlength="40"><input class="input" id="f-oco" placeholder="Country" maxlength="40"></div>
+          <div class="row" style="margin-top:10px"><input class="input" id="f-oc" placeholder="City" maxlength="40"><input class="input" id="f-oco" placeholder="Country" maxlength="60" value="${o.country || ''}"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="f-ocb" style="margin-top:8px">Use this city</button></details>
         <p class="tip" id="f-cur">${o.city ? h`Selected: ${flagOf(o.country)} ${o.city}, ${o.country}` : ''}</p>`;
       const list = $('#f-cities', el), cur = $('#f-cur', el);
       const pick = c => { Object.assign(o, { city: c.city, country: c.country, lat: c.lat ?? o.lat ?? null, lng: c.lng ?? o.lng ?? null }); cur.textContent = `Selected: ${flagOf(c.country)} ${c.city}, ${c.country}`; draw($('#f-cq', el).value); };
       const draw = q => { q = q.toLowerCase(); list.innerHTML = CITIES.filter(c => !q || (c.city + ' ' + c.country).toLowerCase().includes(q)).map(c => h`<button type="button" class="${o.city === c.city ? 'on' : ''}" data-c="${c.city}"><span>${flagOf(c.country)} ${c.city}</span><small style="color:var(--muted)">${c.country}</small></button>`).join(''); };
-      draw('');
+      draw(o.city ? '' : (o.country || ''));
+      if (!o.city && o.country) $('#f-cq', el).value = o.country;
       $('#f-cq', el).oninput = e => draw(e.target.value);
       list.onclick = e => { const b = e.target.closest('button'); if (b) pick(CITIES.find(c => c.city === b.dataset.c)); };
       $('#f-ocb', el).onclick = () => { const c = $('#f-oc', el).value.trim(), co = $('#f-oco', el).value.trim(); if (c && co) pick({ city: c, country: co, lat: null, lng: null }); };
@@ -807,7 +856,7 @@ async function renderMe() {
   const v = $('#view');
   v.innerHTML = h`<header class="topbar"><h2>Profile</h2>${['admin', 'superadmin'].includes(session.role) ? h`<a class="btn btn-ghost btn-sm" href="${session.role === 'superadmin' ? 'superadmin.html' : 'admin.html'}">🛡️ Console</a>` : ''}</header>
     <div class="me-head"><div class="me-av" style="${bg(photo(me))}"><div class="ring" style="--p:${comp}"></div><span class="ring-lbl">${comp}%</span></div>
-      <div><h2 style="margin:0;font-family:var(--display)">${me.name}, ${ageOf(me.dob)} ${vbadge(me)}</h2><div style="color:var(--muted)">${place(me)}</div>
+      <div><h2 style="margin:0;font-family:var(--display)">${me.name}, ${ageOf(me.dob)} ${vbadge(me)}</h2>${me.username ? h`<div style="color:var(--muted);font-size:14px">@${me.username}${me.lastName ? h` · ${me.name} ${me.lastName} (private)` : ''}</div>` : ''}<div style="color:var(--muted)">${place(me)}</div>
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn btn-ghost btn-sm" id="me-prev">Preview</button><span class="streak">${raw(I.flame)} ${me.streak || 1} day streak</span></div></div></div>
     ${tips.length ? h`<section class="card-sec"><h3>Profile strength <span class="tag green">${comp}%</span></h3><div class="progress"><i style="width:${comp}%"></i></div>${tips.slice(0, 3).map(([s, t]) => h`<button class="list-btn" data-edit="${s}">${t}<span>›</span></button>`)}</section>` : ''}
     <section class="card-sec"><h3>Stand out</h3>
@@ -824,7 +873,7 @@ async function renderMe() {
       <label class="switch-row"><span>Pause my profile<small>Hide from Discover. Your matches stay.</small></span><span class="toggle"><input type="checkbox" id="me-pause" ${me.paused ? 'checked' : ''}><span></span></span></label>
       <button class="list-btn" id="me-out">Log out</button>
       <button class="list-btn" id="me-del" style="color:#FF8A8A">Delete account</button></section>
-    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v1.2</p>`;
+    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v1.3</p>`;
   $('#me-prev').onclick = () => bindVoice(openSheet(profileBody(me, { mine: true })));
   $$('[data-edit]', v).forEach(b => b.onclick = () => b.dataset.edit === 'questions' ? questionsSheet() : b.dataset.edit === 'voice' ? voiceIntroSheet() : editSheet(b.dataset.edit));
   $('#me-prefs').onclick = prefsSheet;

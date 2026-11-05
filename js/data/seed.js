@@ -67,7 +67,7 @@ export function seedProfiles(n = 48) {
     const langs = ['Krio', 'English', ...pickN(['Mende', 'Temne', 'Limba', 'Fula', 'Mandingo', 'Kono', 'French'], Math.floor(r() * 2))];
     out.push({
       id: 'seed-' + i,
-      name, dob, gender: woman ? 'woman' : 'man',
+      name, username: name.toLowerCase() + '.' + (i + 7), dob, gender: woman ? 'woman' : 'man',
       intent: pick(INTENTS).id,
       city: city.city, country: city.country,
       lat: city.lat + (r() - 0.5) * 0.08, lng: city.lng + (r() - 0.5) * 0.08,

@@ -19,7 +19,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=1.2.0">
+<link rel="stylesheet" href="css/app.css?v=1.3.0">
 </head>
 <body>
 <noscript><p style="padding:20px">Sierra Leone Connect needs JavaScript turned on.</p></noscript>
@@ -63,9 +63,19 @@
         <p class="fine"><button type="button" class="link" id="forgot">Forgot password?</button></p>
       </form>
       <form id="form-signup" class="hidden" novalidate>
+        <div class="row">
+          <label class="field"><span>First name</span><input class="input" name="firstName" autocomplete="given-name" maxlength="30" required></label>
+          <label class="field"><span>Last name</span><input class="input" name="lastName" autocomplete="family-name" maxlength="40" required></label>
+        </div>
+        <label class="field"><span>Username</span>
+          <div class="at-input"><span aria-hidden="true">@</span><input class="input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="aminata_k" required></div>
+          <small class="hint" id="su-user-hint">3–20 letters, numbers, dots or underscores.</small></label>
         <label class="field"><span>Email</span><input class="input" type="email" name="email" autocomplete="email" required></label>
         <label class="field"><span>Password (8+ characters)</span><input class="input" type="password" name="password" autocomplete="new-password" minlength="8" required></label>
         <label class="field"><span>Date of birth</span><input class="input" type="date" name="dob" required></label>
+        <label class="field"><span>Country</span><select class="input" name="country" id="su-country" required><option value="">Choose your country…</option></select>
+          <small class="hint" id="su-geo-hint"><button type="button" class="link" id="su-geo">📍 Detect my location</button></small></label>
+        <p class="fine" style="text-align:left;margin:-6px 0 12px">Only your first name is shown on your profile. Your last name stays private.</p>
         <label class="switch-row" style="border:0;padding:4px 0 12px"><span style="font-size:13.5px;color:var(--muted)">I'm 18+ and agree to the <a href="#terms" class="link">Terms</a> &amp; <a href="#privacy" class="link">Privacy Policy</a>. I'll treat everyone with respect.</span><span class="toggle"><input type="checkbox" name="agree" required><span></span></span></label>
         <div class="err" id="signup-err" role="alert"></div>
         <button class="btn btn-primary btn-block" type="submit">Create account</button>
@@ -91,6 +101,6 @@
 <!-- Onboarding and main app mount here -->
 <div id="root"></div>
 
-<script type="module" src="js/app.js?v=1.2.0"></script>
+<script type="module" src="js/app.js?v=1.3.0"></script>
 </body>
 </html>

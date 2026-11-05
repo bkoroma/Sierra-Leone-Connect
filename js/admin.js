@@ -109,7 +109,7 @@ async function go(t, push = true) {
   try { await VIEWS[t](m); } catch (e) { m.innerHTML = h`<div class="panel"><b>Error:</b> ${e.message}</div>`; }
 }
 
-const userCell = (p, email) => h`<div class="ucell"><div class="av-xs" style="${bg((p?.photos || [])[0])}"></div><div><b>${p?.name || '—'}${p?.verified ? ' ✓' : ''}</b><small>${email || ''}</small></div></div>`;
+const userCell = (p, email) => h`<div class="ucell"><div class="av-xs" style="${bg((p?.photos || [])[0])}"></div><div><b>${p?.name || '—'}${p?.lastName ? ' ' + p.lastName : ''}${p?.verified ? ' ✓' : ''}</b><small>${p?.username ? '@' + p.username + ' · ' : ''}${email || ''}</small></div></div>`;
 const act = async (fn, okMsg) => { try { await fn(); toast(okMsg); go(tab, false); } catch (e) { toast(e.message, 'error'); } };
 
 function lineChart(days, series) {
@@ -177,7 +177,7 @@ const VIEWS = {
   },
 
   async members(m, q = '') {
-    m.innerHTML = h`<h1>Members</h1><p class="sub">Search by name, email or city.</p>
+    m.innerHTML = h`<h1>Members</h1><p class="sub">Search by name, username, email or city.</p>
       <div class="search"><input class="input" id="q" placeholder="Search members…" value="${q}" aria-label="Search members"></div><div id="ul"><div class="spinner"></div></div>`;
     const draw = async q => {
       const us = await api.admin.users(q);

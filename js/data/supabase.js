@@ -47,8 +47,11 @@ export async function createSupabaseApi(cfg) {
     async init() {},
 
     // Auth
-    async signUp({ email, password }) {
-      const { data, error } = await sb.auth.signUp({ email: String(email).trim(), password, options: { emailRedirectTo: webHome() } });
+    usernameAvailable: u => rpc('username_available', { p_username: u }),
+    async signUp({ email, password, dob, firstName, lastName, username, country, city, lat, lng }) {
+      const { data, error } = await sb.auth.signUp({ email: String(email).trim(), password, options: { emailRedirectTo: webHome(),
+        // Read by the handle_new_user trigger, which validates and saves them to the profile.
+        data: { first_name: firstName, last_name: lastName, username, dob, country, city: city || null, lat: lat ?? null, lng: lng ?? null } } });
       authErr(error);
       return data.user;
     },
