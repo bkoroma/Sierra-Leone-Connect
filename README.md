@@ -50,7 +50,12 @@ Upload the folder contents to the web root, including the hidden `.htaccess` (HT
 ## Live backend (connected)
 - Supabase project **Sierra Leone Connect** (`ftxakwsdbrohtniofqov`, us-east-1), org Afribconnect. `js/config.js` already points at it.
 - Schema applied as migrations `slc_01`–`slc_06`; storage buckets `photos` (public), `voice` and `verifications` (private); realtime on `messages`.
-- **Before launch:** run `supabase/LOCKDOWN_RUN_ME.sql` once in the SQL Editor (permissions lockdown + 3 delete functions). The last query should return all `true`.
+- Permissions lockdown applied (migration `slc_09_security_lockdown`, verified). `supabase/LOCKDOWN_RUN_ME.sql` stays as the reference copy.
 - Auth → URL Configuration: set Site URL to your domain and add it to Redirect URLs. Auth → SMTP: use a custom sender (e.g. Resend) — the built-in mailer is heavily rate-limited.
 - First SuperAdmin: sign up in the app, then `update public.profiles set role = 'superadmin' where email = 'you@example.com';` and open `superadmin.html` to enrol 2FA.
 - To run the offline demo instead, blank `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `js/config.js`.
+
+## Hosting (Render)
+- Live site: https://sierra-leone-connect-5sxz.onrender.com — Render static site `sierra-leone-connect-5sxz` (free), Blueprint `render.yaml`, repo `bkoroma/Sierra-Leone-Connect` (`main`).
+- `scripts/render-build.sh` publishes only the public files to `dist/`; security headers (CSP, HSTS, frame/sniff protection) and cache rules live in `render.yaml`.
+- Auto-deploy on push needs Render's GitHub app to have access to this repo (GitHub → Settings → Applications → Render → Repository access). Until then, deploy from the Render dashboard (Manual Deploy).
