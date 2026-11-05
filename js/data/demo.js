@@ -127,7 +127,7 @@ export const demo = {
     load(); u = String(u || '').trim().toLowerCase();
     return !Object.values(db.profiles).some(p => (p.username || '').toLowerCase() === u);
   },
-  async signUp({ email, password, dob, firstName, lastName, username, country, city, lat, lng }) {
+  async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng }) {
     load();
     email = String(email).trim().toLowerCase();
     username = String(username || '').trim().toLowerCase();
@@ -139,7 +139,8 @@ export const demo = {
     if (Object.values(db.users).some(u => u.email === email)) throw new Error('An account with this email already exists.');
     const id = uid(), salt = uid();
     db.users[id] = { id, email, salt, pw: await sha256(salt + password), role: 'user', status: 'active', createdAt: new Date().toISOString() };
-    db.profiles[id] = { id, name: String(firstName || '').trim().slice(0, 30), lastName: String(lastName || '').trim().slice(0, 40), username, dob,
+    if (!['woman', 'man'].includes(gender)) throw new Error('Choose your gender.');
+    db.profiles[id] = { id, gender, name: String(firstName || '').trim().slice(0, 30), lastName: String(lastName || '').trim().slice(0, 40), username, dob,
       country: country || '', city: city || '', lat: lat ?? null, lng: lng ?? null,
       photos: [], interests: [], languages: [], prompts: [], createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), verificationStatus: 'none' };
     audit(id, 'signup', id); save();

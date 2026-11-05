@@ -124,9 +124,10 @@ function bindLanding() {
     const f = new FormData(e.target), btn = e.target.querySelector('[type=submit]');
     const err = $('#signup-err'); err.textContent = '';
     const firstName = String(f.get('firstName') || '').trim(), lastName = String(f.get('lastName') || '').trim();
-    const username = normalizeUsername(f.get('username')), country = f.get('country'), dob = f.get('dob');
+    const username = normalizeUsername(f.get('username')), country = f.get('country'), dob = f.get('dob'), gender = f.get('gender');
     if (firstName.length < 2) { err.textContent = 'Enter your first name.'; return; }
     if (lastName.length < 2) { err.textContent = 'Enter your last name.'; return; }
+    if (!['woman', 'man'].includes(gender)) { err.textContent = 'Choose your gender.'; return; }
     if (!USERNAME_RE.test(username)) { err.textContent = 'Choose a valid username.'; return; }
     if (!country) { err.textContent = 'Choose your country.'; return; }
     if (String(f.get('password')).length < 8) { err.textContent = 'Password must be at least 8 characters.'; return; }
@@ -136,7 +137,7 @@ function bindLanding() {
     btn.disabled = true;
     try {
       if (!(await api.usernameAvailable(username))) { err.textContent = `@${username} is taken — try another.`; btn.disabled = false; return; }
-      await api.signUp({ email: f.get('email'), password: f.get('password'), dob, firstName, lastName, username, country, city: geo.city, lat: geo.lat, lng: geo.lng });
+      await api.signUp({ email: f.get('email'), password: f.get('password'), dob, gender, firstName, lastName, username, country, city: geo.city, lat: geo.lat, lng: geo.lng });
       session = await api.session();
       if (!session) { err.textContent = ''; toast('Check your email to confirm your account, then log in.'); setTab('login'); btn.disabled = false; return; }
       await enter();
@@ -207,6 +208,7 @@ const STEP = {
   basics: {
     render(el, o) {
       o.prefs = o.prefs || defaultPrefs();
+      if (!o.prefs.seeking?.length && o.gender) o.prefs.seeking = [o.gender === 'man' ? 'woman' : 'man']; // sensible default from sign-up gender
       el.innerHTML = h`<h1>Let's start with you</h1><p class="sub">Members see your username${o.username ? h` (@${o.username})` : ''} — your name stays private.</p>
         <label class="field"><span>First name (private)</span><input class="input" id="f-name" maxlength="30" value="${o.name || ''}" autocomplete="given-name"></label>
         <label class="field"><span>Date of birth</span><input class="input" type="date" id="f-dob" value="${o.dob || ''}"></label>

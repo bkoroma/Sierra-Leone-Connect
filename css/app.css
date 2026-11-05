@@ -364,3 +364,10 @@ a.btn { text-decoration: none; } .btn-ghost { color: var(--text); }
 .hint { font-size: 12.5px; color: var(--dim); min-height: 17px; }
 .hint.ok { color: #8CF59F; } .hint.bad { color: #FF8A8A; }
 .field .row { gap: 10px; }
+
+.seg-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg-pick label { position: relative; }
+.seg-pick input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.seg-pick span { display: flex; align-items: center; justify-content: center; min-height: 50px; border-radius: 14px; border: 1px solid var(--line); background: rgba(255,255,255,.04); font-weight: 700; transition: all .15s; }
+.seg-pick input:checked + span { background: rgba(30,181,58,.18); border-color: var(--green); color: #B9F5C6; }
+.seg-pick input:focus-visible + span { outline: 2px solid var(--blue2); outline-offset: 2px; }
