@@ -93,6 +93,14 @@ function bindLanding() {
   $('#su-geo').onclick = () => autoLocate(true);
   sel.onchange = () => { geo.city = ''; geo.lat = geo.lng = null; geoHint.textContent = 'Country set manually.'; geoHint.className = 'hint'; };
 
+  const pw1 = $('#form-signup [name=password]'), pw2 = $('#form-signup [name=password2]'), pwHint = $('#su-pw-hint');
+  const checkPw = () => {
+    if (!pw2.value) { pwHint.textContent = ''; pwHint.className = 'hint'; return; }
+    const same = pw1.value === pw2.value;
+    pwHint.textContent = same ? '✓ Passwords match' : 'Passwords don\'t match';
+    pwHint.className = 'hint ' + (same ? 'ok' : 'bad');
+  };
+  pw1.addEventListener('input', checkPw); pw2.addEventListener('input', checkPw);
   const uIn = $('#form-signup [name=username]'), uHint = $('#su-user-hint');
   let userOk = false;
   const checkUser = debounce(async () => {
@@ -121,6 +129,8 @@ function bindLanding() {
     if (lastName.length < 2) { err.textContent = 'Enter your last name.'; return; }
     if (!USERNAME_RE.test(username)) { err.textContent = 'Choose a valid username.'; return; }
     if (!country) { err.textContent = 'Choose your country.'; return; }
+    if (String(f.get('password')).length < 8) { err.textContent = 'Password must be at least 8 characters.'; return; }
+    if (f.get('password') !== f.get('password2')) { err.textContent = 'Passwords don\'t match.'; pw2.focus(); return; }
     if (!dob || ageOf(dob) < (settings.minAge || 18)) { err.textContent = `You must be ${settings.minAge || 18} or older to join.`; return; }
     if (!f.get('agree')) { err.textContent = 'Please confirm you are 18+ and agree to the terms.'; return; }
     btn.disabled = true;
@@ -197,8 +207,8 @@ const STEP = {
   basics: {
     render(el, o) {
       o.prefs = o.prefs || defaultPrefs();
-      el.innerHTML = h`<h1>Let's start with you</h1><p class="sub">This is how you'll appear to the community.</p>
-        <label class="field"><span>First name</span><input class="input" id="f-name" maxlength="30" value="${o.name || ''}" autocomplete="given-name"></label>
+      el.innerHTML = h`<h1>Let's start with you</h1><p class="sub">Members see your username${o.username ? h` (@${o.username})` : ''} — your name stays private.</p>
+        <label class="field"><span>First name (private)</span><input class="input" id="f-name" maxlength="30" value="${o.name || ''}" autocomplete="given-name"></label>
         <label class="field"><span>Date of birth</span><input class="input" type="date" id="f-dob" value="${o.dob || ''}"></label>
         <div class="field"><span>I am a</span><div class="chips" id="f-gender">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${o.gender === g}">${g === 'woman' ? 'Woman' : 'Man'}</button>`)}</div></div>
         <div class="field"><span>Show me</span><div class="chips" id="f-seek">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${(o.prefs.seeking || []).includes(g)}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>
@@ -856,7 +866,7 @@ async function renderMe() {
   const v = $('#view');
   v.innerHTML = h`<header class="topbar"><h2>Profile</h2>${['admin', 'superadmin'].includes(session.role) ? h`<a class="btn btn-ghost btn-sm" href="${session.role === 'superadmin' ? 'superadmin.html' : 'admin.html'}">🛡️ Console</a>` : ''}</header>
     <div class="me-head"><div class="me-av" style="${bg(photo(me))}"><div class="ring" style="--p:${comp}"></div><span class="ring-lbl">${comp}%</span></div>
-      <div><h2 style="margin:0;font-family:var(--display)">${me.name}, ${ageOf(me.dob)} ${vbadge(me)}</h2>${me.username ? h`<div style="color:var(--muted);font-size:14px">@${me.username}${me.lastName ? h` · ${me.name} ${me.lastName} (private)` : ''}</div>` : ''}<div style="color:var(--muted)">${place(me)}</div>
+      <div><h2 style="margin:0;font-family:var(--display)">${me.username || me.name}, ${ageOf(me.dob)} ${vbadge(me)}</h2>${me.name ? h`<div style="color:var(--muted);font-size:13.5px">🔒 ${me.name}${me.lastName ? ' ' + me.lastName : ''} · only you can see your name</div>` : ''}<div style="color:var(--muted)">${place(me)}</div>
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn btn-ghost btn-sm" id="me-prev">Preview</button><span class="streak">${raw(I.flame)} ${me.streak || 1} day streak</span></div></div></div>
     ${tips.length ? h`<section class="card-sec"><h3>Profile strength <span class="tag green">${comp}%</span></h3><div class="progress"><i style="width:${comp}%"></i></div>${tips.slice(0, 3).map(([s, t]) => h`<button class="list-btn" data-edit="${s}">${t}<span>›</span></button>`)}</section>` : ''}
     <section class="card-sec"><h3>Stand out</h3>
@@ -874,7 +884,7 @@ async function renderMe() {
       <button class="list-btn" id="me-out">Log out</button>
       <button class="list-btn" id="me-del" style="color:#FF8A8A">Delete account</button></section>
     <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v1.3</p>`;
-  $('#me-prev').onclick = () => bindVoice(openSheet(profileBody(me, { mine: true })));
+  $('#me-prev').onclick = () => bindVoice(openSheet(profileBody({ ...me, name: me.username || me.name }, { mine: true })));
   $$('[data-edit]', v).forEach(b => b.onclick = () => b.dataset.edit === 'questions' ? questionsSheet() : b.dataset.edit === 'voice' ? voiceIntroSheet() : editSheet(b.dataset.edit));
   $('#me-prefs').onclick = prefsSheet;
   $('#me-safety').onclick = () => infoSheet('safety');

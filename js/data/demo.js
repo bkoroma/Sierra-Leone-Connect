@@ -84,7 +84,8 @@ const publicProfile = (p, meId = session()?.uid) => {
   if (!p) return p;
   const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, ...rest } = p;
   const me = meId && db.profiles[meId];
-  return { ...rest, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
+  // Members only ever see each other's username — first and last name stay private.
+  return { ...rest, name: p.username || p.name, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
 };
 const DAY = 864e5, EXPIRY = 7 * DAY;
 const supersAllowed = p => db.settings.dailySuperLikes + (p?.qotdDay === todayKey() ? 1 : 0);

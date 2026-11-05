@@ -109,7 +109,7 @@ async function go(t, push = true) {
   try { await VIEWS[t](m); } catch (e) { m.innerHTML = h`<div class="panel"><b>Error:</b> ${e.message}</div>`; }
 }
 
-const userCell = (p, email) => h`<div class="ucell"><div class="av-xs" style="${bg((p?.photos || [])[0])}"></div><div><b>${p?.name || '—'}${p?.lastName ? ' ' + p.lastName : ''}${p?.verified ? ' ✓' : ''}</b><small>${p?.username ? '@' + p.username + ' · ' : ''}${email || ''}</small></div></div>`;
+const userCell = (p, email) => h`<div class="ucell"><div class="av-xs" style="${bg((p?.photos || [])[0])}"></div><div><b>${p?.firstName ?? p?.name ?? '—'}${p?.lastName ? ' ' + p.lastName : ''}${p?.verified ? ' ✓' : ''}</b><small>${p?.username ? '@' + p.username + ' · ' : ''}${email || ''}</small></div></div>`;
 const act = async (fn, okMsg) => { try { await fn(); toast(okMsg); go(tab, false); } catch (e) { toast(e.message, 'error'); } };
 
 function lineChart(days, series) {
