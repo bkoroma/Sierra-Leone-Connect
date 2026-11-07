@@ -60,14 +60,22 @@ async function seedStaff() {
   db.staffSeeded = true; save();
 }
 
+// A suspension with an end date lifts itself once that date has passed.
+function liftExpired(u) {
+  if (u?.status === 'suspended' && u.suspendedUntil && new Date(u.suspendedUntil) <= Date.now()) {
+    u.status = 'active'; u.statusReason = null; u.suspendedUntil = null; save();
+  }
+}
+const untilText = u => u.suspendedUntil ? ' until ' + new Date(u.suspendedUntil).toUTCString().replace(/:\d\d GMT$/, ' UTC').slice(5) : '';
 function session() { try { return JSON.parse(localStorage.getItem(SESS)); } catch { return null; } }
 function requireUser() {
   load();
   const s = session();
   const u = s && db.users[s.uid];
   if (!u) throw new Error('Please log in again.');
+  liftExpired(u);
   if (u.status === 'banned') throw new Error('This account has been banned.');
-  if (u.status === 'suspended') throw new Error('This account is suspended. ' + (u.statusReason || ''));
+  if (u.status === 'suspended') throw new Error('This account is suspended' + untilText(u) + '. ' + (u.statusReason || ''));
   return u;
 }
 function requireStaff(level = 'admin') {
@@ -82,7 +90,7 @@ const blockedBetween = (a, b) => db.blocks.some(x => (x.by === a && x.target ===
 const active = id => db.users[id]?.status === 'active';
 const publicProfile = (p, meId = session()?.uid) => {
   if (!p) return p;
-  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, ...rest } = p;
+  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, notice, noticeAt, ...rest } = p;
   const me = meId && db.profiles[meId];
   // Members only ever see each other's username — first and last name stay private.
   return { ...rest, name: p.username || p.name, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
@@ -134,6 +142,7 @@ export const demo = {
     username = String(username || '').trim().toLowerCase();
     if (!/^(?![._])(?!.*[._]$)(?!.*[._]{2})[a-z0-9._]{3,20}$/.test(username)) throw new Error('Choose a valid username.');
     if (!(await demo.usernameAvailable(username))) throw new Error(`@${username} is taken — try another.`);
+    if (db.settings.signupsOpen === false) throw new Error('New sign-ups are paused right now. Please try again later.');
     if (!dob || ageOf(dob) < db.settings.minAge) throw new Error(`You must be ${db.settings.minAge}+ to use Sierra Leone Connect.`);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Enter a valid email.');
     if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
@@ -163,11 +172,13 @@ export const demo = {
     load();
     const s = session(); const u = s && db.users[s.uid];
     if (!u) return null;
-    return { id: u.id, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason, aal: 'aal2' };
+    liftExpired(u);
+    return { id: u.id, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason, suspendedUntil: u.suspendedUntil || null, aal: 'aal2' };
   },
 
   // ---------- Profile ----------
-  async me() { const u = requireUser(); const p = db.profiles[u.id]; p.lastActive = new Date().toISOString(); save(); return { ...p, answers: { ...(p.answers || {}) }, answersCount: Object.keys(p.answers || {}).length }; },
+  async me() { const u = requireUser(); const p = db.profiles[u.id]; p.lastActive = new Date().toISOString(); save(); return { ...p, notice: p.notice || null, noticeAt: p.noticeAt || null, answers: { ...(p.answers || {}) }, answersCount: Object.keys(p.answers || {}).length }; },
+  async ackNotice() { const u = requireUser(); const p = db.profiles[u.id]; p.notice = null; p.noticeAt = null; save(); },
   async saveProfile(patch) {
     const u = requireUser();
     const allowed = ['name', 'dob', 'gender', 'intent', 'city', 'country', 'lat', 'lng', 'homeDistrict', 'heritage', 'faith', 'languages', 'interests', 'prompts', 'photos', 'bio', 'job', 'education', 'heightCm', 'prefs', 'paused', 'onboarded', 'voice'];
@@ -376,51 +387,106 @@ export const demo = {
         users: users.length,
         active24h: Object.values(db.profiles).filter(p => !p.staff && p.lastActive && now - new Date(p.lastActive) < day).length,
         newToday: users.filter(u => now - new Date(u.createdAt) < day).length,
+        new7d: users.filter(u => now - new Date(u.createdAt) < 7 * day).length,
         matches: db.matches.filter(m => !m.unmatched).length,
         messages: db.messages.length,
         openReports: db.reports.filter(r => r.status === 'open').length,
         pendingVerifications: Object.values(db.profiles).filter(p => p.verificationStatus === 'pending').length,
         flagged: db.messages.filter(m => m.flagged?.length && !m.cleared).length,
-        banned: users.filter(u => u.status === 'banned').length
+        suspended: Object.values(db.users).filter(u => u.status === 'suspended').length,
+        banned: Object.values(db.users).filter(u => u.status === 'banned').length
       };
     },
-    async users(q = '') {
-      requireStaff(); q = q.trim().toLowerCase();
-      return Object.values(db.users).map(u => ({ ...u, pw: undefined, salt: undefined, profile: db.profiles[u.id] }))
-        .filter(u => !q || u.email.includes(q) || [u.profile?.name, u.profile?.lastName, u.profile?.username, u.profile?.city].some(v => (v || '').toLowerCase().includes(q)))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200);
+    async users(q = '') { return demo.admin.members(q, 'all'); },
+    async members(q = '', filter = 'all') {
+      requireStaff(); q = String(q).trim().toLowerCase();
+      const F = { all: () => true, active: u => u.status === 'active', suspended: u => u.status === 'suspended', banned: u => u.status === 'banned', staff: u => u.role !== 'user',
+        pending: u => db.profiles[u.id]?.verificationStatus === 'pending', verified: u => !!db.profiles[u.id]?.verified, unverified: u => u.role === 'user' && !db.profiles[u.id]?.verified,
+        reported: u => db.reports.some(r => r.target === u.id && r.status === 'open') };
+      if (!F[filter]) throw new Error('Bad filter');
+      return Object.values(db.users).map(u => { const p = db.profiles[u.id]; return { id: u.id, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason, suspendedUntil: u.suspendedUntil || null, createdAt: u.createdAt, lastActive: p?.lastActive, openReports: db.reports.filter(r => r.target === u.id && r.status === 'open').length, profile: p && { ...publicProfile(p), firstName: p.name, lastName: p.lastName || null, verificationStatus: p.verificationStatus || 'none' } }; })
+        .filter(u => F[filter](u) && (!q || u.email.includes(q) || [u.profile?.firstName, u.profile?.lastName, u.profile?.username, u.profile?.city, u.profile?.country].some(v => (v || '').toLowerCase().includes(q))))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 500);
     },
-    async setStatus(id, status, reason = '') {
+    async member(id) {
+      requireStaff(); const u = db.users[id], p = db.profiles[id]; if (!u || !p) throw new Error('User not found');
+      const reps = db.reports.filter(r => r.target === id);
+      return { ...publicProfile(p), firstName: p.name, lastName: p.lastName || null, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason || null, suspendedUntil: u.suspendedUntil || null,
+        verificationStatus: p.verificationStatus || 'none', onboarded: !!p.onboarded || !!p.bot, paused: !!p.paused, notice: p.notice || null, noticeAt: p.noticeAt || null,
+        counts: { matches: db.matches.filter(m => !m.unmatched && (m.a === id || m.b === id)).length, messages: db.messages.filter(m => m.from === id).length,
+          likesSent: db.swipes.filter(s => s.from === id && s.kind !== 'pass').length, likesReceived: db.swipes.filter(s => s.to === id && s.kind !== 'pass').length,
+          reportsAgainst: reps.length, reportsMade: db.reports.filter(r => r.by === id).length, blockedBy: db.blocks.filter(b => b.target === id).length,
+          flagged: db.messages.filter(m => m.from === id && m.flagged?.length).length },
+        reports: reps.slice(0, 20).map(r => ({ id: r.id, reason: r.reason, details: r.details, status: r.status, resolution: r.resolution || null, at: r.at, reporter: db.profiles[r.by]?.username || db.profiles[r.by]?.name || null })),
+        history: db.audit.filter(a => a.target === id).slice(0, 30).map(a => ({ at: a.at, action: a.action, actor: emailOf(a.actor), meta: a.meta })) };
+    },
+    async setStatus(id, status, reason = '', days = null) {
       const me = requireStaff();
       if (!['active', 'suspended', 'banned'].includes(status)) throw new Error('Bad status');
+      if (id === me.id) throw new Error('You cannot change your own status.');
       const t = db.users[id]; if (!t) throw new Error('User not found');
       if (t.role !== 'user' && me.role !== 'superadmin') throw new Error('Only a SuperAdmin can act on staff accounts.');
-      if (id === me.id) throw new Error('You cannot change your own status.');
-      t.status = status; t.statusReason = reason; audit(me.id, 'set_status', id, { status, reason }); save();
+      if (days != null && (days < 1 || days > 365)) throw new Error('Suspensions last 1–365 days.');
+      t.status = status; t.statusReason = status === 'active' ? null : String(reason || '').trim().slice(0, 200) || null;
+      t.suspendedUntil = status === 'suspended' && days ? new Date(Date.now() + days * DAY).toISOString() : null;
+      const m = { reason: String(reason || '').trim() || undefined, days: days ?? undefined };
+      audit(me.id, status === 'active' ? 'reinstate' : status === 'banned' ? 'ban' : 'suspend', id, JSON.parse(JSON.stringify(m))); save();
+    },
+    async warn(id, message) {
+      const me = requireStaff(); const msg = String(message || '').trim().slice(0, 500);
+      if (!msg) throw new Error('Write the warning message.');
+      if (id === me.id) throw new Error('You cannot warn yourself.');
+      const t = db.users[id]; if (!t) throw new Error('User not found');
+      if (t.role !== 'user' && me.role !== 'superadmin') throw new Error('Only a SuperAdmin can act on staff accounts.');
+      db.profiles[id].notice = msg; db.profiles[id].noticeAt = new Date().toISOString();
+      audit(me.id, 'warn', id, { message: msg }); save();
+    },
+    async editMember(id, action, index = null) {
+      const me = requireStaff(); const t = db.users[id], p = db.profiles[id]; if (!t || !p) throw new Error('User not found');
+      if (t.role !== 'user' && me.role !== 'superadmin') throw new Error('Only a SuperAdmin can act on staff accounts.');
+      let removed = null;
+      if (action === 'remove_photo') { if (index == null || index < 0 || index >= (p.photos || []).length) throw new Error('Photo not found'); removed = p.photos[index]; p.photos = p.photos.filter((_, i) => i !== index); }
+      else if (action === 'clear_bio') p.bio = '';
+      else if (action === 'clear_prompts') p.prompts = [];
+      else if (action === 'clear_voice') { removed = p.voice || null; p.voice = null; }
+      else if (action === 'revoke_verification') { p.verified = false; p.verificationStatus = 'none'; p.verificationSelfie = null; }
+      else throw new Error('Bad action');
+      p.completeness = completeness(p);
+      audit(me.id, 'edit_member', id, index == null ? { action } : { action, index }); save();
+      return { removed };
     },
     async reports(status = 'open') {
       requireStaff();
-      return db.reports.filter(r => status === 'all' || r.status === status).map(r => ({ ...r, reporter: { id: r.by, email: emailOf(r.by), name: db.profiles[r.by]?.name }, subject: { ...db.profiles[r.target], email: emailOf(r.target), status: db.users[r.target]?.status } }));
+      return db.reports.filter(r => status === 'all' || r.status === status).map(r => ({ ...r, message: r.messageId ? db.messages.find(x => x.id === r.messageId)?.body || null : null, reporter: { id: r.by, email: emailOf(r.by), name: db.profiles[r.by]?.username || db.profiles[r.by]?.name }, subject: { ...db.profiles[r.target], email: emailOf(r.target), status: db.users[r.target]?.status } }));
     },
-    async resolveReport(id, action, note = '') {
+    async resolveReport(id, action, note = '', days = null) {
       const me = requireStaff();
+      if (!['dismiss', 'warn', 'suspend', 'ban'].includes(action)) throw new Error('Bad action');
       const r = db.reports.find(x => x.id === id); if (!r) throw new Error('Report not found');
-      if (action === 'suspend' || action === 'ban') await demo.admin.setStatus(r.target, action === 'ban' ? 'banned' : 'suspended', `Report: ${r.reason}`);
+      if (r.status !== 'open') throw new Error('This report has already been handled.');
+      note = String(note || '').trim();
+      if (action === 'warn') await demo.admin.warn(r.target, note || `We received a report about your activity (${r.reason}). Please follow our community guidelines — further reports can lead to suspension.`);
+      if (action === 'suspend') await demo.admin.setStatus(r.target, 'suspended', `Report: ${r.reason}`, days || 7);
+      if (action === 'ban') {
+        await demo.admin.setStatus(r.target, 'banned', `Report: ${r.reason}`);
+        db.reports.filter(x => x.target === r.target && x.status === 'open' && x.id !== id).forEach(x => Object.assign(x, { status: 'actioned', resolution: 'ban', handledBy: me.id, handledAt: new Date().toISOString() }));
+      }
       r.status = action === 'dismiss' ? 'dismissed' : 'actioned'; r.resolution = action; r.note = note; r.handledBy = me.id; r.handledAt = new Date().toISOString();
-      audit(me.id, 'resolve_report', r.target, { action, reportId: id }); save();
+      audit(me.id, 'resolve_report', r.target, JSON.parse(JSON.stringify({ action, reportId: id, note: note || undefined, days: days ?? undefined }))); save();
     },
     async verifications() {
       requireStaff();
       return Object.values(db.profiles).filter(p => p.verificationStatus === 'pending').map(p => ({ ...p, email: emailOf(p.id) }));
     },
     async decideVerification(id, approve) {
-      const me = requireStaff(); const p = db.profiles[id]; if (!p) throw new Error('Not found');
-      p.verificationStatus = approve ? 'approved' : 'rejected'; p.verified = !!approve;
+      const me = requireStaff(); const p = db.profiles[id]; if (!p) throw new Error('User not found');
+      if (p.verificationStatus !== 'pending') throw new Error('This verification was already decided.');
+      p.verificationStatus = approve ? 'approved' : 'rejected'; p.verified = !!approve; p.completeness = completeness(p);
       audit(me.id, approve ? 'verify_approve' : 'verify_reject', id); save();
     },
     async flagged() {
       requireStaff();
-      return db.messages.filter(m => m.flagged?.length && !m.cleared).map(m => ({ ...m, sender: { id: m.from, name: db.profiles[m.from]?.name, email: emailOf(m.from), status: db.users[m.from]?.status } })).reverse();
+      return db.messages.filter(m => m.flagged?.length && !m.cleared).map(m => ({ ...m, sender: { id: m.from, name: db.profiles[m.from]?.username || db.profiles[m.from]?.name, email: emailOf(m.from), status: db.users[m.from]?.status } })).reverse();
     },
     async clearFlag(id) { const me = requireStaff(); const m = db.messages.find(x => x.id === id); if (m) { m.cleared = true; audit(me.id, 'clear_flag', m.from, { messageId: id }); save(); } },
 
@@ -439,7 +505,21 @@ export const demo = {
       if (clean.minAge < 18) clean.minAge = 18;
       db.settings = clean; audit(me.id, 'save_settings', 'app', clean); save(); return clean;
     },
-    async audit() { requireStaff('superadmin'); return db.audit.slice(0, 300).map(a => ({ ...a, actorEmail: emailOf(a.actor), targetEmail: db.users[a.target] ? emailOf(a.target) : a.target })); },
+    async deleteUser(id) {
+      const me = requireStaff('superadmin');
+      if (id === me.id) throw new Error('You cannot delete your own account from the console.');
+      const t = db.users[id]; if (!t) throw new Error('User not found');
+      if (t.role === 'superadmin') throw new Error('Remove the SuperAdmin role before deleting this account.');
+      audit(me.id, 'delete_user', id, { email: t.email, username: db.profiles[id]?.username || undefined });
+      const mids = new Set(db.matches.filter(m => m.a === id || m.b === id).map(m => m.id));
+      db.swipes = db.swipes.filter(s => s.from !== id && s.to !== id);
+      db.matches = db.matches.filter(m => !mids.has(m.id));
+      db.messages = db.messages.filter(m => !mids.has(m.matchId) && m.from !== id);
+      db.reports = db.reports.filter(r => r.target !== id); db.reports.forEach(r => { if (r.by === id) r.by = null; });
+      db.blocks = db.blocks.filter(b => b.by !== id && b.target !== id);
+      delete db.profiles[id]; delete db.users[id]; save();
+    },
+    async audit() { requireStaff('superadmin'); return db.audit.slice(0, 300).map(a => ({ ...a, actorEmail: emailOf(a.actor), targetEmail: db.users[a.target] ? emailOf(a.target) : a.meta?.email || a.target })); },
     async analytics() {
       requireStaff('superadmin');
       const days = [...Array(14)].map((_, i) => new Date(Date.now() - (13 - i) * 864e5).toISOString().slice(0, 10));
@@ -448,7 +528,11 @@ export const demo = {
       Object.values(db.profiles).filter(p => !p.staff && p.country).forEach(p => byCountry[p.country] = (byCountry[p.country] || 0) + 1);
       const byIntent = {};
       Object.values(db.profiles).filter(p => p.intent).forEach(p => byIntent[p.intent] = (byIntent[p.intent] || 0) + 1);
-      return { days, signups: count(Object.values(db.users), u => u.createdAt), matches: count(db.matches, m => m.at), messages: count(db.messages, m => m.at), byCountry, byIntent };
+      const members = Object.values(db.profiles).filter(p => !p.staff), byGender = {};
+      members.filter(p => p.gender).forEach(p => byGender[p.gender] = (byGender[p.gender] || 0) + 1);
+      const likes = db.swipes.filter(x => x.kind !== 'pass');
+      return { days, signups: count(Object.values(db.users).filter(u => u.role === 'user'), u => u.createdAt), matches: count(db.matches, m => m.at), messages: count(db.messages, m => m.at), likes: count(likes, x => x.at), byCountry, byIntent, byGender,
+        totals: { members: members.length, onboarded: members.filter(p => p.onboarded || p.bot).length, verified: members.filter(p => p.verified).length, likes: likes.length, matches: db.matches.length, conversations: new Set(db.messages.map(m => m.matchId)).size } };
     },
     async resetDemo() { const me = requireStaff('superadmin'); localStorage.removeItem(KEY); db = null; load(); await seedStaff(); localStorage.removeItem(SESS); }
   }

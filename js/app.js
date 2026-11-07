@@ -52,6 +52,7 @@ function bindLanding() {
   };
   $('#tab-login').onclick = () => setTab('login');
   $('#tab-signup').onclick = () => { setTab('signup'); autoLocate(); };
+  if (settings.signupsOpen === false) $('#signup-err').textContent = 'New sign-ups are paused right now — please check back soon. Existing members can still log in.';
   $$('[data-goto]').forEach(b => b.onclick = () => { setTab(b.dataset.goto); if (b.dataset.goto === 'signup') autoLocate(); $('#auth').scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => $(`#form-${b.dataset.goto} input`).focus(), 350); });
   $$('.js-info').forEach(a => a.onclick = e => { e.preventDefault(); infoSheet(a.getAttribute('href').slice(1)); });
 
@@ -134,6 +135,7 @@ function bindLanding() {
     if (f.get('password') !== f.get('password2')) { err.textContent = 'Passwords don\'t match.'; pw2.focus(); return; }
     if (!dob || ageOf(dob) < (settings.minAge || 18)) { err.textContent = `You must be ${settings.minAge || 18} or older to join.`; return; }
     if (!f.get('agree')) { err.textContent = 'Please confirm you are 18+ and agree to the terms.'; return; }
+    if (settings.signupsOpen === false) { err.textContent = 'New sign-ups are paused right now. Please try again later.'; return; }
     btn.disabled = true;
     try {
       if (!(await api.usernameAvailable(username))) { err.textContent = `@${username} is taken — try another.`; btn.disabled = false; return; }
@@ -141,16 +143,17 @@ function bindLanding() {
       session = await api.session();
       if (!session) { err.textContent = ''; toast('Check your email to confirm your account, then log in.'); setTab('login'); btn.disabled = false; return; }
       await enter();
-    } catch (x) { err.textContent = /database error/i.test(x.message) ? 'We couldn\'t create your account — that username may have just been taken. Try another.' : x.message; }
+    } catch (x) { err.textContent = /database error/i.test(x.message) ? (settings.signupsOpen === false ? 'New sign-ups are paused right now. Please try again later.' : 'We couldn\'t create your account — that username may have just been taken. Try another.') : x.message; }
     btn.disabled = false;
   };
 }
 
 async function enter() {
   if (session?.status && session.status !== 'active') {
-    const st = session.status, why = session.statusReason;
+    const st = session.status, why = session.statusReason, until = session.suspendedUntil;
     await api.signOut(); session = null; showLanding();
-    $('#login-err').textContent = st === 'banned' ? 'This account has been banned.' : 'This account is suspended.' + (why ? ' ' + why : '');
+    $('#login-err').textContent = st === 'banned' ? 'This account has been banned.' + (why ? ' ' + why : '')
+      : 'This account is suspended' + (until ? ' until ' + new Date(until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '') + '.' + (why ? ' ' + why : '');
     return;
   }
   if (settings.maintenance && !['admin', 'superadmin'].includes(session.role)) {
@@ -162,6 +165,16 @@ async function enter() {
   $('#landing').classList.add('hidden');
   if (!me.onboarded) return onboarding();
   shell();
+}
+
+// A warning from the moderators. It keeps coming back until the member taps "I understand".
+function showNotice() {
+  const sh = openSheet(h`<div class="pad" style="text-align:center"><div style="font-size:48px">⚠️</div>
+    <h2 style="font-family:var(--display);margin:6px 0">A message from the Sierra Leone Connect team</h2>
+    <p class="notice-text">${me.notice}</p>
+    <p style="color:var(--muted);font-size:13.5px">Our community guidelines keep everyone safe. Repeated problems can lead to suspension.</p>
+    <button class="btn btn-primary btn-block" id="notice-ok">I understand</button></div>`);
+  $('#notice-ok', sh).onclick = async () => { try { await api.ackNotice(); me.notice = null; } catch (e) { toast(e.message, 'error'); } closeSheet(); };
 }
 
 // ───────────────────────── Onboarding ─────────────────────────
@@ -357,6 +370,7 @@ function shell() {
 function route() {
   S.chatUnsub?.(); S.chatUnsub = null;
   closeSheet();
+  if (me?.notice) setTimeout(showNotice, 0); // shown on every screen until acknowledged
   const [, r = 'discover', arg] = location.hash.match(/^#\/([a-z]+)\/?(.*)$/) || [];
   $$('.nav a').forEach(a => a.setAttribute('aria-current', a.dataset.r === r || (r === 'chat' && a.dataset.r === 'chats') ? 'page' : 'false'));
   $('.nav').classList.toggle('hidden', r === 'chat');

@@ -141,7 +141,8 @@ export const DEFAULT_SETTINGS = {
   maintenance: false,
   announcement: '',
   requireAdminMfa: true,
-  undoEnabled: true
+  undoEnabled: true,
+  signupsOpen: true
 };
 
 export const DECK_MODES = [

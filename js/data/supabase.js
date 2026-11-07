@@ -26,6 +26,11 @@ export async function createSupabaseApi(cfg) {
   const chans = new Map(); const signed = new Map();
   const extOf = type => /mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : 'webm';
   const toBlob = async dataUrl => (await fetch(dataUrl)).blob();
+  // Object path inside one of OUR buckets for a public URL, or null for anything else.
+  const storagePath = (url, bucket) => {
+    const pre = `${cfg.SUPABASE_URL.replace(/\/$/, '')}/storage/v1/object/public/${bucket}/`;
+    return typeof url === 'string' && url.startsWith(pre) ? decodeURIComponent(url.slice(pre.length).split('?')[0]) : null;
+  };
 
   async function upload(bucket, dataUrl) {
     const id = await userId(); if (!id) throw new Error('Please log in again.');
@@ -69,6 +74,7 @@ export async function createSupabaseApi(cfg) {
 
     // Profile
     me: () => rpc('get_me'),
+    ackNotice: () => rpc('ack_notice'),
     saveProfile: p => rpc('save_profile', { p }),
     async uploadPhoto(dataUrl) {
       if (/^https:\/\//.test(dataUrl)) return dataUrl;
@@ -150,10 +156,29 @@ export async function createSupabaseApi(cfg) {
 
     admin: {
       stats: () => rpc('admin_stats'),
-      users: (q = '') => rpc('admin_users', { p_q: q }),
-      setStatus: (id, status, reason = '') => rpc('admin_set_status', { p_id: id, p_status: status, p_reason: reason }),
+      users: (q = '') => rpc('admin_members', { p_q: q, p_filter: 'all' }),
+      members: (q = '', filter = 'all') => rpc('admin_members', { p_q: q, p_filter: filter }),
+      member: id => rpc('admin_member', { p_id: id }),
+      setStatus: (id, status, reason = '', days = null) => rpc('admin_moderate', { p_id: id, p_status: status, p_reason: reason || '', p_days: days }),
+      warn: (id, message) => rpc('admin_warn', { p_id: id, p_message: message }),
+      async editMember(id, action, index = null) {
+        const r = await rpc('admin_edit_member', { p_id: id, p_action: action, p_index: index });
+        // Removed photos / voice intros are also deleted from storage so the old public link stops working.
+        const path = storagePath(r?.removed, 'photos');
+        if (path) { try { await sb.storage.from('photos').remove([path]); } catch { /* the profile no longer references it */ } }
+        return r;
+      },
+      async deleteUser(id) {
+        const files = await rpc('admin_user_media', { p_id: id });
+        const byBucket = {};
+        for (const f of files || []) (byBucket[f.bucket] ||= []).push(f.path);
+        for (const [bucket, paths] of Object.entries(byBucket)) {
+          for (let i = 0; i < paths.length; i += 100) await sb.storage.from(bucket).remove(paths.slice(i, i + 100));
+        }
+        await rpc('super_delete_user', { p_id: id });
+      },
       reports: (status = 'open') => rpc('admin_reports', { p_status: status }),
-      resolveReport: (id, action, note = '') => rpc('admin_resolve_report', { p_id: id, p_action: action, p_note: note }),
+      resolveReport: (id, action, note = '', days = null) => rpc('admin_handle_report', { p_id: id, p_action: action, p_note: note || '', p_days: days }),
       async verifications() {
         const rows = await rpc('admin_verifications');
         return Promise.all(rows.map(async r => {

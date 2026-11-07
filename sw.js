@@ -1,7 +1,7 @@
 // Sierra Leone Connect service worker — bump VERSION on every deploy.
-const VERSION = 'slc-v1.3.0';
+const VERSION = 'slc-v1.4.0';
 const SHELL = [
-  './', './index.html', './manifest.webmanifest', './css/app.css?v=1.3.0', './js/app.js?v=1.3.0',
+  './', './index.html', './manifest.webmanifest', './css/app.css?v=1.4.0', './js/app.js?v=1.4.0',
   './js/config.js', './js/util.js', './js/constants.js', './js/match.js', './js/icons.js', './js/geo.js', './js/geo-data.js',
   './js/data/index.js', './js/data/demo.js', './js/data/seed.js', './js/data/supabase.js', './js/vendor/supabase-2.49.4.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'

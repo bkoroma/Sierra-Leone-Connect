@@ -1,5 +1,5 @@
 // Web account deletion (required by Google Play: deletion without installing the app)
-import { getApi } from './data/index.js?v=1.3.0';
+import { getApi } from './data/index.js?v=1.4.0';
 const f = document.getElementById('del'), err = document.getElementById('del-err');
 f.onsubmit = async e => {
   e.preventDefault(); err.textContent = '';

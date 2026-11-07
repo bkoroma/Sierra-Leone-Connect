@@ -59,3 +59,21 @@ Upload the folder contents to the web root, including the hidden `.htaccess` (HT
 - Live site: https://sierra-leone-connect-5sxz.onrender.com — Render static site `sierra-leone-connect-5sxz` (free), Blueprint `render.yaml`, repo `bkoroma/Sierra-Leone-Connect` (`main`).
 - `scripts/render-build.sh` publishes only the public files to `dist/`; security headers (CSP, HSTS, frame/sniff protection) and cache rules live in `render.yaml`.
 - Auto-deploy on push needs Render's GitHub app to have access to this repo (GitHub → Settings → Applications → Render → Repository access). Until then, deploy from the Render dashboard (Manual Deploy).
+
+## Staff consoles (v1.4)
+
+**Admin console (`/admin.html`, moderators)**
+- Reports: dismiss, warn (the member gets the message in the app and must tap "I understand"), suspend for 1–30 days, or ban. Banning closes every other open report on that member. A report can't be handled twice.
+- Verification: compare the selfie with the profile photo, then approve or reject.
+- Scam Shield: review flagged messages; mark fine, warn, suspend or ban the sender.
+- Members: search by name, username, email, city or country. Filter by active, open reports, suspended, banned, awaiting verification, verified, not verified or staff.
+- Member detail (click any member): full profile, counts (matches, messages, likes, reports, blocks, flags), reports and staff history. You can remove individual photos (deleted from storage too), clear the bio, prompts or voice intro, revoke verification, warn, suspend for a set time or indefinitely, ban or reinstate.
+
+**SuperAdmin console (`/superadmin.html`)**: everything above, plus
+- Analytics: members, onboarding and verification rates, likes, matches, share of matches that chatted, 14-day trends, country, goals and gender.
+- Staff & roles: promote members to Admin or SuperAdmin, or remove staff.
+- App settings: daily likes and super likes, minimum age, pause new sign-ups, maintenance mode, staff 2FA, Scam Shield, undo, and the announcement banner.
+- Permanently delete an account and its uploads (needs a typed confirmation). Use this for deletion requests.
+- Audit log: filter, search and export to CSV. Members can also be exported to CSV.
+
+Every action is checked again on the server: role, active status, and 2FA (aal2) when it's required. Every action is written to the audit log.
