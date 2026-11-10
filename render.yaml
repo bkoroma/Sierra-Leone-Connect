@@ -37,12 +37,14 @@ services:
       - path: /sw.js
         name: Cache-Control
         value: no-cache, no-store, must-revalidate
+      # Modules import each other without version strings, so browsers must revalidate (cheap 304s)
+      # or a fresh app.js could load next to a stale util.js after a deploy.
       - path: /js/*
         name: Cache-Control
-        value: public, max-age=3600
+        value: no-cache
       - path: /css/*
         name: Cache-Control
-        value: public, max-age=3600
+        value: no-cache
       - path: /icons/*
         name: Cache-Control
         value: public, max-age=2592000

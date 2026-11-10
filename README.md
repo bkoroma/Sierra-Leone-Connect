@@ -77,3 +77,32 @@ Upload the folder contents to the web root, including the hidden `.htaccess` (HT
 - Audit log: filter, search and export to CSV. Members can also be exported to CSV.
 
 Every action is checked again on the server: role, active status, and 2FA (aal2) when it's required. Every action is written to the audit log.
+
+## App health & operations (v1.5)
+- **SuperAdmin → System health** checks:
+  - database reachable and schema up to date;
+  - support and child-safety e-mails set;
+  - staff 2FA required, and each staff member actually enrolled;
+  - a backup SuperAdmin exists;
+  - maintenance mode and sign-ups status;
+  - sign-up e-mails being confirmed (spots SMTP/Site URL problems);
+  - report, verification and Scam Shield backlogs (24-hour target);
+  - errors from members' devices;
+  - members stuck in onboarding;
+  - database and storage size.
+  It also links to the Supabase and Render dashboards.
+- **Errors from members' devices** are reported automatically through `log_client_error`. Repeats are grouped, the table is capped at 500 rows, and anyone can report. SuperAdmins can read and clear the list.
+- **App settings → Contact details:** support and safety e-mails, used in Help & support and on the policy pages. No redeploy needed.
+- **Member detail:** e-mail confirmed or not, last sign-in, private staff notes, send a password reset, resend the confirmation e-mail. New member filters: Email not confirmed, Still onboarding.
+- **Members:**
+  - change their password in Settings;
+  - finish a reset link in an in-app sheet (no browser pop-ups);
+  - resend the confirmation e-mail from the login screen;
+  - reach Help & support.
+- **Safety nets:**
+  - Maintenance mode is enforced on the server.
+  - The last SuperAdmin can't delete their own account.
+  - Every foreign key is indexed.
+  - The offline service worker no longer mixes old and new files after a deploy.
+  - JS/CSS are always revalidated.
+

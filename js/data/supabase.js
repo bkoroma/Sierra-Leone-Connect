@@ -20,7 +20,20 @@ export async function createSupabaseApi(cfg) {
     if (error) throw new Error(error.message?.replace(/^.*?ERROR:\s*/, '') || 'Request failed');
     return data;
   };
-  const authErr = e => { if (e) throw new Error(e.message); };
+  // Friendlier wording for the auth errors members actually hit. `code` lets the app offer the right next step.
+  const AUTH_MSG = [
+    [/email not confirmed/i, 'email_not_confirmed', 'Please confirm your email first — check your inbox and spam folder for the link.'],
+    [/invalid login credentials/i, 'invalid_credentials', 'Email or password is incorrect.'],
+    [/already registered|already been registered/i, 'user_exists', 'An account with this email already exists. Try logging in or resetting your password.'],
+    [/rate limit|only request this after/i, 'rate_limited', 'Too many emails were requested. Please wait a minute and try again.'],
+    [/database error saving new user/i, 'signup_rejected', 'We couldn\'t create your account — that username may have just been taken, or sign-ups are paused.'],
+    [/new password should be different/i, 'same_password', 'Choose a password you haven\'t used before.']
+  ];
+  const authErr = e => {
+    if (!e) return;
+    const hit = AUTH_MSG.find(([re]) => re.test(e.message || ''));
+    throw Object.assign(new Error(hit ? hit[2] : e.message), { code: hit ? hit[1] : e.code });
+  };
   const userId = async () => (await sb.auth.getUser()).data.user?.id;
   const mapMsg = r => ({ id: r.id, matchId: r.match_id, from: r.sender, body: r.body, kind: r.kind || 'text', media: r.media, meta: r.meta, ctx: r.ctx, at: r.created_at, flagged: r.flagged || [] });
   const chans = new Map(); const signed = new Map();
@@ -40,12 +53,9 @@ export async function createSupabaseApi(cfg) {
     return path;
   }
 
-  sb.auth.onAuthStateChange(async ev => {
-    if (ev === 'PASSWORD_RECOVERY') {
-      const pw = prompt('Choose a new password (8+ characters):');
-      if (pw && pw.length >= 8) { const { error } = await sb.auth.updateUser({ password: pw }); alert(error ? error.message : 'Password updated ✓'); }
-    }
-  });
+  // A password-reset link signs the person in with a recovery session. The app shows its own "new password" sheet.
+  let recovery = false, onRecovery = null;
+  sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') { recovery = true; onRecovery?.(); } });
 
   const api = {
     mode: 'live',
@@ -62,6 +72,18 @@ export async function createSupabaseApi(cfg) {
     },
     async signIn({ email, password }) { const { data, error } = await sb.auth.signInWithPassword({ email: String(email).trim(), password }); authErr(error); return data.user; },
     async signOut() { await sb.auth.signOut(); },
+    onRecovery(cb) { onRecovery = cb; if (recovery) cb(); },
+    async updatePassword(password) {
+      if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
+      const { error } = await sb.auth.updateUser({ password }); authErr(error); recovery = false; return { ok: true };
+    },
+    async resendConfirmation(email) {
+      const { error } = await sb.auth.resend({ type: 'signup', email: String(email).trim(), options: { emailRedirectTo: webHome() } });
+      authErr(error); return { ok: true, note: 'Confirmation email sent — check the inbox and spam folder.' };
+    },
+    async logError(page, message, stack = '') {
+      try { await sb.rpc('log_client_error', { p_page: page, p_message: String(message || ''), p_stack: String(stack || ''), p_ua: navigator.userAgent, p_version: cfg.VERSION || '' }); } catch { /* ignore */ }
+    },
     async resetPassword(email) { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: webHome() }); authErr(error); return { ok: true, note: 'Check your email for a reset link.' }; },
     async session() {
       const { data } = await sb.auth.getSession();
@@ -192,6 +214,11 @@ export async function createSupabaseApi(cfg) {
       clearFlag: id => rpc('admin_clear_flag', { p_id: id }),
       setRole: (id, role) => rpc('super_set_role', { p_id: id, p_role: role }),
       saveSettings: s => rpc('super_save_settings', { p: s }),
+      health: () => rpc('super_health'),
+      clearErrors: () => rpc('super_clear_errors'),
+      note: (id, text = '', kind = 'note') => rpc('admin_note', { p_id: id, p_text: text, p_kind: kind }),
+      async sendReset(id, email) { const r = await api.resetPassword(email); await rpc('admin_note', { p_id: id, p_text: '', p_kind: 'send_reset' }); return r; },
+      async resendConfirm(id, email) { const r = await api.resendConfirmation(email); await rpc('admin_note', { p_id: id, p_text: '', p_kind: 'resend_confirm' }); return r; },
       audit: () => rpc('super_audit'),
       analytics: () => rpc('super_analytics')
     }

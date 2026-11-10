@@ -76,6 +76,7 @@ function requireUser() {
   liftExpired(u);
   if (u.status === 'banned') throw new Error('This account has been banned.');
   if (u.status === 'suspended') throw new Error('This account is suspended' + untilText(u) + '. ' + (u.statusReason || ''));
+  if (u.role === 'user' && db.settings?.maintenance) throw new Error('Sierra Leone Connect is down for maintenance. Please check back soon.');
   return u;
 }
 function requireStaff(level = 'admin') {
@@ -168,6 +169,25 @@ export const demo = {
   },
   async signOut() { localStorage.removeItem(SESS); },
   async resetPassword(email) { return { ok: true, note: 'Demo mode: password reset emails are sent once Supabase is connected.' }; },
+  async resendConfirmation(email) { return { ok: true, note: 'Demo mode: confirmation emails are sent once Supabase is connected.' }; },
+  async updatePassword(password) {
+    const u = requireUser();
+    if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
+    if (u.pw) { u.salt = uid(); u.pw = await sha256(u.salt + password); save(); }
+    return { ok: true };
+  },
+  onRecovery() { /* recovery links only exist with Supabase */ },
+  async logError(page, message, stack = '') {
+    try {
+      load(); db.errors ||= [];
+      const msg = String(message || '').trim().slice(0, 300); if (!msg) return;
+      const sig = page + '|' + msg.replace(/\d+/g, '#');
+      const e = db.errors.find(x => x.sig === sig);
+      if (e) { e.count++; e.lastAt = new Date().toISOString(); }
+      else if (db.errors.length < 500) db.errors.push({ sig, page, message: msg, stack: String(stack || '').slice(0, 2000), ua: navigator.userAgent.slice(0, 200), version: '', count: 1, firstAt: new Date().toISOString(), lastAt: new Date().toISOString() });
+      save();
+    } catch { /* never let error reporting throw */ }
+  },
   async session() {
     load();
     const s = session(); const u = s && db.users[s.uid];
@@ -207,11 +227,13 @@ export const demo = {
   async removeAnswer(qid) { const u = requireUser(); const p = db.profiles[u.id]; if (p.answers) delete p.answers[qid]; p.completeness = completeness(p); save(); },
   async requestVerification(selfieDataUrl) {
     const u = requireUser(); const p = db.profiles[u.id];
-    p.verificationSelfie = selfieDataUrl; p.verificationStatus = 'pending'; save();
+    p.verificationSelfie = selfieDataUrl; p.verificationStatus = 'pending'; p.verificationRequestedAt = new Date().toISOString(); save();
     return { status: 'pending' };
   },
   async deleteAccount() {
     const u = requireUser();
+    if (u.role === 'superadmin' && !Object.values(db.users).some(x => x.id !== u.id && x.role === 'superadmin' && x.status === 'active'))
+      throw new Error('You are the only SuperAdmin. Make another member SuperAdmin before deleting this account.');
     db.swipes = db.swipes.filter(s => s.from !== u.id && s.to !== u.id);
     const mids = new Set(db.matches.filter(m => m.a === u.id || m.b === u.id).map(m => m.id));
     db.matches = db.matches.filter(m => !mids.has(m.id));
@@ -402,9 +424,10 @@ export const demo = {
       requireStaff(); q = String(q).trim().toLowerCase();
       const F = { all: () => true, active: u => u.status === 'active', suspended: u => u.status === 'suspended', banned: u => u.status === 'banned', staff: u => u.role !== 'user',
         pending: u => db.profiles[u.id]?.verificationStatus === 'pending', verified: u => !!db.profiles[u.id]?.verified, unverified: u => u.role === 'user' && !db.profiles[u.id]?.verified,
-        reported: u => db.reports.some(r => r.target === u.id && r.status === 'open') };
+        reported: u => db.reports.some(r => r.target === u.id && r.status === 'open'),
+        unconfirmed: () => false, onboarding: u => u.role === 'user' && !db.profiles[u.id]?.onboarded && !db.profiles[u.id]?.bot };
       if (!F[filter]) throw new Error('Bad filter');
-      return Object.values(db.users).map(u => { const p = db.profiles[u.id]; return { id: u.id, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason, suspendedUntil: u.suspendedUntil || null, createdAt: u.createdAt, lastActive: p?.lastActive, openReports: db.reports.filter(r => r.target === u.id && r.status === 'open').length, profile: p && { ...publicProfile(p), firstName: p.name, lastName: p.lastName || null, verificationStatus: p.verificationStatus || 'none' } }; })
+      return Object.values(db.users).map(u => { const p = db.profiles[u.id]; return { id: u.id, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason, suspendedUntil: u.suspendedUntil || null, createdAt: u.createdAt, lastActive: p?.lastActive, emailConfirmed: true, openReports: db.reports.filter(r => r.target === u.id && r.status === 'open').length, profile: p && { ...publicProfile(p), firstName: p.name, lastName: p.lastName || null, verificationStatus: p.verificationStatus || 'none', onboarded: !!p.onboarded || !!p.bot } }; })
         .filter(u => F[filter](u) && (!q || u.email.includes(q) || [u.profile?.firstName, u.profile?.lastName, u.profile?.username, u.profile?.city, u.profile?.country].some(v => (v || '').toLowerCase().includes(q))))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 500);
     },
@@ -413,12 +436,13 @@ export const demo = {
       const reps = db.reports.filter(r => r.target === id);
       return { ...publicProfile(p), firstName: p.name, lastName: p.lastName || null, email: u.email, role: u.role, status: u.status, statusReason: u.statusReason || null, suspendedUntil: u.suspendedUntil || null,
         verificationStatus: p.verificationStatus || 'none', onboarded: !!p.onboarded || !!p.bot, paused: !!p.paused, notice: p.notice || null, noticeAt: p.noticeAt || null,
+        emailConfirmed: true, lastSignIn: p.lastActive || null,
         counts: { matches: db.matches.filter(m => !m.unmatched && (m.a === id || m.b === id)).length, messages: db.messages.filter(m => m.from === id).length,
           likesSent: db.swipes.filter(s => s.from === id && s.kind !== 'pass').length, likesReceived: db.swipes.filter(s => s.to === id && s.kind !== 'pass').length,
           reportsAgainst: reps.length, reportsMade: db.reports.filter(r => r.by === id).length, blockedBy: db.blocks.filter(b => b.target === id).length,
           flagged: db.messages.filter(m => m.from === id && m.flagged?.length).length },
         reports: reps.slice(0, 20).map(r => ({ id: r.id, reason: r.reason, details: r.details, status: r.status, resolution: r.resolution || null, at: r.at, reporter: db.profiles[r.by]?.username || db.profiles[r.by]?.name || null })),
-        history: db.audit.filter(a => a.target === id).slice(0, 30).map(a => ({ at: a.at, action: a.action, actor: emailOf(a.actor), meta: a.meta })) };
+        history: db.audit.filter(a => a.target === id).slice(0, 40).map(a => ({ at: a.at, action: a.action, actor: emailOf(a.actor), meta: a.meta })) };
     },
     async setStatus(id, status, reason = '', days = null) {
       const me = requireStaff();
@@ -476,7 +500,8 @@ export const demo = {
     },
     async verifications() {
       requireStaff();
-      return Object.values(db.profiles).filter(p => p.verificationStatus === 'pending').map(p => ({ ...p, email: emailOf(p.id) }));
+      return Object.values(db.profiles).filter(p => p.verificationStatus === 'pending').map(p => ({ ...p, email: emailOf(p.id), requestedAt: p.verificationRequestedAt || null }))
+        .sort((a, b) => String(a.requestedAt || '').localeCompare(String(b.requestedAt || '')));
     },
     async decideVerification(id, approve) {
       const me = requireStaff(); const p = db.profiles[id]; if (!p) throw new Error('User not found');
@@ -503,8 +528,45 @@ export const demo = {
       const clean = { ...db.settings };
       for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in s) clean[k] = typeof DEFAULT_SETTINGS[k] === 'number' ? Math.max(0, Math.min(1000, Number(s[k]) || 0)) : typeof DEFAULT_SETTINGS[k] === 'boolean' ? !!s[k] : String(s[k]).slice(0, 280);
       if (clean.minAge < 18) clean.minAge = 18;
+      for (const k of ['supportEmail', 'safetyEmail']) {
+        const v = String(s[k] ?? db.settings[k] ?? '').trim().toLowerCase();
+        if (v && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v)) throw new Error(`${k === 'supportEmail' ? 'Support' : 'Safety'} e-mail doesn't look right.`);
+        if (v) clean[k] = v; else delete clean[k];
+      }
       db.settings = clean; audit(me.id, 'save_settings', 'app', clean); save(); return clean;
     },
+    async note(id, text = '', kind = 'note') {
+      const me = requireStaff();
+      if (!['note', 'send_reset', 'resend_confirm'].includes(kind)) throw new Error('Bad kind');
+      const v = String(text || '').trim().slice(0, 1000);
+      if (kind === 'note' && !v) throw new Error('Write the note.');
+      const t = db.users[id]; if (!t) throw new Error('User not found');
+      if (t.role !== 'user' && me.role !== 'superadmin') throw new Error('Only a SuperAdmin can act on staff accounts.');
+      audit(me.id, kind, id, v ? { note: v } : {}); save();
+    },
+    async sendReset(id, email) { await demo.admin.note(id, '', 'send_reset'); return demo.resetPassword(email); },
+    async resendConfirm(id, email) { await demo.admin.note(id, '', 'resend_confirm'); return demo.resendConfirmation(email); },
+    async health() {
+      requireStaff('superadmin'); load();
+      const now = Date.now(), DAYMS = 864e5, users = Object.values(db.users), profs = Object.values(db.profiles);
+      const members = profs.filter(p => !p.staff), errs = db.errors || [];
+      const minAt = arr => arr.length ? arr.reduce((a, b) => a < b ? a : b) : null;
+      const openR = db.reports.filter(r => r.status === 'open'), pend = profs.filter(p => p.verificationStatus === 'pending'), flags = db.messages.filter(m => m.flagged?.length && !m.cleared);
+      const bytes = (() => { try { return new Blob([localStorage.getItem('slc_db_v2') || '']).size; } catch { return 0; } })();
+      return {
+        schema: 15, now: new Date().toISOString(), dbSize: bytes, settings: { ...db.settings }, demo: true,
+        tables: { profiles: profs.length, swipes: db.swipes.length, matches: db.matches.length, messages: db.messages.length, answers: members.reduce((n, p) => n + Object.keys(p.answers || {}).length, 0), reports: db.reports.length, blocks: db.blocks.length, audit_log: db.audit.length, client_errors: errs.length },
+        storage: [{ bucket: 'photos (in browser)', files: members.reduce((n, p) => n + (p.photos || []).length, 0), bytes }],
+        auth: { users: users.length, signups7d: users.filter(u => now - new Date(u.createdAt) < 7 * DAYMS).length, unconfirmed7d: 0, unconfirmedOld: 0, lastSignup: users.map(u => u.createdAt).sort().pop() || null, lastSignIn: null },
+        staff: { superadmins: users.filter(u => u.role === 'superadmin' && u.status === 'active').length, admins: users.filter(u => u.role === 'admin' && u.status === 'active').length, without2fa: [] },
+        members: { total: members.length, onboarded: members.filter(p => p.onboarded || p.bot).length, stuckOnboarding: members.filter(p => !p.onboarded && !p.bot && now - new Date(p.createdAt) > DAYMS).length,
+          active7d: members.filter(p => p.lastActive && now - new Date(p.lastActive) < 7 * DAYMS).length, noPhotos: members.filter(p => (p.onboarded || p.bot) && !(p.photos || []).length).length,
+          suspended: users.filter(u => u.status === 'suspended').length, banned: users.filter(u => u.status === 'banned').length },
+        backlog: { openReports: openR.length, oldestReport: minAt(openR.map(r => r.at)), pendingVerifications: pend.length, oldestVerification: minAt(pend.map(p => p.verificationRequestedAt).filter(Boolean)), flagged: flags.length, oldestFlag: minAt(flags.map(m => m.at)) },
+        errors: { last24h: errs.filter(e => now - new Date(e.lastAt) < DAYMS).reduce((n, e) => n + e.count, 0), recent: [...errs].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, 40) }
+      };
+    },
+    async clearErrors() { const me = requireStaff('superadmin'); const n = (db.errors || []).length; db.errors = []; audit(me.id, 'clear_errors', 'app', { rows: n }); save(); },
     async deleteUser(id) {
       const me = requireStaff('superadmin');
       if (id === me.id) throw new Error('You cannot delete your own account from the console.');

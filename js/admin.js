@@ -3,6 +3,10 @@
 import { getApi } from './data/index.js';
 import { $, $$, h, safeImg, ageOf, timeAgo, toast, debounce } from './util.js';
 import { flagOf, intentById, DEFAULT_SETTINGS } from './constants.js';
+import { CONFIG } from './config.js';
+import { installErrorReporting } from './errors.js';
+
+const EXPECTED_SCHEMA = 15; // bump with every database migration the console depends on
 
 const CONSOLE = document.body.dataset.console; // 'admin' | 'superadmin'
 const bg = u => `background-image:url("${safeImg(u).replace(/["'()\\\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))}")`;
@@ -15,6 +19,7 @@ const TABS = [
   { id: 'verify', label: 'Verification', grp: 'Moderation', count: 'pendingVerifications' },
   { id: 'shield', label: 'Scam Shield', grp: 'Moderation', count: 'flagged' },
   { id: 'members', label: 'Members', grp: 'Moderation' },
+  { id: 'health', label: 'System health', grp: 'Platform', super: true, count: 'healthIssues' },
   { id: 'analytics', label: 'Analytics', grp: 'Platform', super: true },
   { id: 'staff', label: 'Staff & roles', grp: 'Platform', super: true },
   { id: 'settings', label: 'App settings', grp: 'Platform', super: true },
@@ -24,7 +29,8 @@ const SUSPEND_OPTS = [[1, '24 hours'], [3, '3 days'], [7, '7 days'], [14, '14 da
 const ACTION_LABEL = {
   signup: 'Signed up', account_deleted: 'Deleted own account', set_status: 'Status change', suspend: 'Suspended', ban: 'Banned', reinstate: 'Reinstated',
   warn: 'Warning sent', resolve_report: 'Report handled', verify_approve: 'Verification approved', verify_reject: 'Verification rejected',
-  clear_flag: 'Flag cleared', set_role: 'Role change', save_settings: 'Settings saved', edit_member: 'Profile content removed', delete_user: 'Account deleted'
+  clear_flag: 'Flag cleared', set_role: 'Role change', save_settings: 'Settings saved', edit_member: 'Profile content removed', delete_user: 'Account deleted',
+  note: 'Staff note', send_reset: 'Password reset e-mail sent', resend_confirm: 'Confirmation e-mail re-sent', clear_errors: 'Error log cleared'
 };
 const EDIT_LABEL = { remove_photo: 'photo removed', clear_bio: 'bio cleared', clear_prompts: 'prompts cleared', clear_voice: 'voice intro removed', revoke_verification: 'verification revoked' };
 
@@ -32,6 +38,7 @@ boot().catch(e => { $('#root').innerHTML = h`<p style="padding:24px">Console fai
 
 async function boot() {
   api = await getApi();
+  installErrorReporting(api, CONSOLE);
   session = await api.session();
   if (!session) return loginView();
   if (!allowed()) return deniedView();
@@ -45,6 +52,7 @@ async function boot() {
 const allowed = () => session.status === 'active' && (CONSOLE === 'superadmin' ? session.role === 'superadmin' : ['admin', 'superadmin'].includes(session.role));
 const isSuper = () => session.role === 'superadmin';
 const superHere = () => isSuper() && CONSOLE === 'superadmin';
+const ago = t => { const x = timeAgo(t); return x === 'now' ? 'just now' : x + ' ago'; };
 const fmtDate = d => d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 
 function loginView(err = '') {
@@ -180,10 +188,11 @@ async function shell() {
   $('#main').addEventListener('click', e => { const b = e.target.closest('[data-member]'); if (b && b.dataset.member) openMember(b.dataset.member); });
   window.onhashchange = () => go(location.hash.slice(1) || 'overview', false);
   go(location.hash.slice(1) || 'overview', false);
+  if (superHere()) api.admin.health().then(hd => { healthIssues = healthChecks(hd, 0).filter(c => c.lvl !== 'ok').length; refreshCounts(); }).catch(() => {});
 }
 
 async function refreshCounts() {
-  try { stats = await api.admin.stats(); $$('[data-count]').forEach(b => { const n = stats[b.dataset.count] || 0; b.textContent = n; b.classList.toggle('hidden', !n); }); }
+  try { stats = await api.admin.stats(); if (superHere()) stats.healthIssues = healthIssues; $$('[data-count]').forEach(b => { const n = stats[b.dataset.count] || 0; b.textContent = n; b.classList.toggle('hidden', !n); }); }
   catch (e) { if (/authori|log in|aal2|two-factor|banned|suspended/i.test(e.message)) location.reload(); }
 }
 
@@ -232,13 +241,14 @@ async function openMember(id) {
           <p class="sub" style="margin:2px 0 8px">${p.username ? '@' + p.username + ' · ' : ''}${p.email || ''}</p>
           ${statusPill(p)} ${staffTarget ? h`<span class="status ${p.role}">${p.role}</span>` : ''} ${p.paused ? h`<span class="tag">Paused</span>` : ''} ${!p.onboarded ? h`<span class="tag">Not onboarded</span>` : ''}</div></div>
       ${p.status !== 'active' && p.statusReason ? h`<div class="note-box">Reason: ${p.statusReason}</div>` : ''}
-      ${p.notice ? h`<div class="note-box warn">Unread warning (sent ${timeAgo(p.noticeAt)} ago): ${p.notice}</div>` : ''}
+      ${p.notice ? h`<div class="note-box warn">Unread warning (sent ${ago(p.noticeAt)}): ${p.notice}</div>` : ''}
       <div class="facts">
         <div><span>Age</span><b>${ageOf(p.dob) ?? '—'}</b></div><div><span>Gender</span><b>${p.gender || '—'}</b></div>
         <div><span>Location</span><b>${p.city || p.country ? h`${flagOf(p.country)} ${[p.city, p.country].filter(Boolean).join(', ')}` : '—'}</b></div>
         <div><span>Looking for</span><b>${p.intent ? intentById(p.intent).label : '—'}</b></div>
-        <div><span>Joined</span><b>${fmtDate(p.createdAt)}</b></div><div><span>Last active</span><b>${p.lastActive ? timeAgo(p.lastActive) + ' ago' : '—'}</b></div>
+        <div><span>Joined</span><b>${fmtDate(p.createdAt)}</b></div><div><span>Last active</span><b>${p.lastActive ? ago(p.lastActive) : '—'}</b></div>
         <div><span>Profile</span><b>${p.completeness ?? 0}% complete</b></div><div><span>Verification</span><b>${p.verified ? 'approved' : p.verificationStatus || 'none'}</b></div>
+        <div><span>Email</span><b class="${p.emailConfirmed === false ? 'warn-txt' : ''}">${p.emailConfirmed === false ? 'Not confirmed' : 'Confirmed'}</b></div><div><span>Last sign-in</span><b>${p.lastSignIn ? ago(p.lastSignIn) : '—'}</b></div>
       </div>
       <div class="counts">
         <div><b>${c.matches ?? 0}</b><span>matches</span></div><div><b>${c.messages ?? 0}</b><span>messages</span></div>
@@ -251,6 +261,10 @@ async function openMember(id) {
         ${p.status === 'active' ? h`<button class="btn btn-ghost btn-sm" data-do="suspend">Suspend…</button><button class="btn btn-danger btn-sm" data-do="ban">Ban</button>` : h`<button class="btn btn-primary btn-sm" data-do="reinstate">Reinstate</button>${p.status === 'suspended' ? h`<button class="btn btn-danger btn-sm" data-do="ban">Ban</button>` : ''}`}
         ${p.verified ? h`<button class="btn btn-ghost btn-sm" data-do="revoke">Revoke verification</button>` : ''}
         ${superHere() && p.role !== 'superadmin' ? h`<button class="btn btn-danger btn-sm" data-do="delete">Delete account…</button>` : ''}
+        <span class="acts-break"></span>
+        <button class="btn btn-ghost btn-sm" data-do="note">📝 Add note</button>
+        <button class="btn btn-ghost btn-sm" data-do="reset">Send password reset</button>
+        ${p.emailConfirmed === false ? h`<button class="btn btn-ghost btn-sm" data-do="confirm">Resend confirmation e-mail</button>` : ''}
       </div>` : h`<p class="sub">${self ? 'This is your own account.' : 'Only a SuperAdmin can act on staff accounts.'}</p>`}
       <h3>Photos</h3>
       ${(p.photos || []).length ? h`<div class="ph-grid">${p.photos.map((u, i) => h`<div class="ph" style="${bg(u)}">${canAct ? h`<button class="ph-x" data-photo="${i}" aria-label="Remove photo ${i + 1}">Remove</button>` : ''}</div>`)}</div>` : h`<p class="sub">No photos.</p>`}
@@ -259,9 +273,9 @@ async function openMember(id) {
       ${(p.prompts || []).filter(x => x.a).map(x => h`<div class="mem-text"><small>${x.q}</small><br>${x.a}</div>`)}${!(p.prompts || []).some(x => x.a) ? h`<p class="mem-text">—</p>` : ''}
       ${p.voice ? h`<h3>Voice intro ${canAct ? h`<button class="link sm" data-do="clear_voice">Remove</button>` : ''}</h3><audio controls preload="none" src="${safeAudio(p.voice)}"></audio>` : ''}
       <h3>Reports against this member</h3>
-      ${(p.reports || []).length ? (p.reports).map(r => h`<div class="mini"><span class="tag gold">${r.reason}</span> <span class="status ${r.status === 'open' ? 'suspended' : 'active'}">${r.status}${r.resolution ? ' · ' + r.resolution : ''}</span> <small>${timeAgo(r.at)} ago${r.reporter ? ' · by @' + r.reporter : ''}</small>${r.details ? h`<q>${r.details}</q>` : ''}</div>`) : h`<p class="sub">None.</p>`}
+      ${(p.reports || []).length ? (p.reports).map(r => h`<div class="mini"><span class="tag gold">${r.reason}</span> <span class="status ${r.status === 'open' ? 'suspended' : 'active'}">${r.status}${r.resolution ? ' · ' + r.resolution : ''}</span> <small>${ago(r.at)}${r.reporter ? ' · by @' + r.reporter : ''}</small>${r.details ? h`<q>${r.details}</q>` : ''}</div>`) : h`<p class="sub">None.</p>`}
       <h3>Staff history</h3>
-      ${(p.history || []).length ? h`<div class="hist">${p.history.map(x => h`<div><small>${fmtDate(x.at)}</small><b>${ACTION_LABEL[x.action] || x.action}${x.action === 'edit_member' ? ' · ' + (EDIT_LABEL[x.meta?.action] || x.meta?.action || '') : ''}</b><span>${x.actor}${x.meta?.reason ? ' — ' + x.meta.reason : ''}${x.meta?.days ? ` (${x.meta.days} days)` : ''}${x.meta?.message ? ' — “' + x.meta.message + '”' : ''}${x.meta?.role ? ' → ' + x.meta.role : ''}</span></div>`)}</div>` : h`<p class="sub">No staff actions yet.</p>`}
+      ${(p.history || []).length ? h`<div class="hist">${p.history.map(x => h`<div><small>${fmtDate(x.at)}</small><b>${ACTION_LABEL[x.action] || x.action}${x.action === 'edit_member' ? ' · ' + (EDIT_LABEL[x.meta?.action] || x.meta?.action || '') : ''}</b><span>${x.actor}${x.meta?.reason ? ' — ' + x.meta.reason : ''}${x.meta?.days ? ` (${x.meta.days} days)` : ''}${x.meta?.message ? ' — “' + x.meta.message + '”' : ''}${x.meta?.note ? ' — “' + x.meta.note + '”' : ''}${x.meta?.role ? ' → ' + x.meta.role : ''}</span></div>`)}</div>` : h`<p class="sub">No staff actions yet.</p>`}
     </div>`;
     const edit = async (action, index, label) => {
       const v = await ask({ title: `Remove from ${who}'s profile?`, text: label, ok: 'Remove', danger: true });
@@ -276,6 +290,15 @@ async function openMember(id) {
       if (d === 'clear_prompts') return run(() => edit('clear_prompts', null, 'All prompt answers are erased.'), refresh);
       if (d === 'clear_voice') return run(() => edit('clear_voice', null, 'The voice intro is removed and deleted.'), refresh);
       if (d === 'revoke') return run(async () => { if (!await ask({ title: 'Revoke verification?', text: 'The ✓ badge disappears. The member can submit a new selfie.', ok: 'Revoke', danger: true })) return false; await api.admin.editMember(id, 'revoke_verification'); toast('Verification revoked'); }, refresh);
+      if (d === 'note') return run(async () => {
+        const v = await ask({ title: `Note on ${who}`, text: 'Private to staff. Shows in this member\'s staff history and the audit log.', ok: 'Save note', fields: [{ name: 'note', label: 'Note', type: 'textarea', required: true, max: 1000 }] });
+        if (!v) return false; await api.admin.note(id, v.note); toast('Note saved');
+      }, refresh);
+      if (d === 'reset') return run(async () => {
+        if (!await ask({ title: 'Send a password reset e-mail?', text: `A reset link goes to ${p.email}. Their current password keeps working until they change it.`, ok: 'Send e-mail' })) return false;
+        const r = await api.admin.sendReset(id, p.email); toast(r?.note || 'Reset e-mail sent');
+      }, refresh);
+      if (d === 'confirm') return run(async () => { const r = await api.admin.resendConfirm(id, p.email); toast(r?.note || 'Confirmation e-mail sent'); }, refresh);
       if (d === 'delete') return run(async () => {
         const word = p.username || 'DELETE';
         if (!await ask({ title: `Permanently delete ${who}?`, text: 'Deletes the account, profile, photos, matches and messages. This cannot be undone. Use this for deletion requests or illegal content.', ok: 'Delete forever', danger: true, confirmWord: word })) return false;
@@ -287,7 +310,83 @@ async function openMember(id) {
 }
 const safeAudio = u => /^https:\/\//i.test(u || '') || /^data:audio\//i.test(u || '') ? u : '';
 
+// ───────────── System health ─────────────
+let healthIssues = 0;
+const DB_LIMIT = 500 * 1024 ** 2, STORAGE_LIMIT = 1024 ** 3; // Supabase free plan
+const mb = b => (Number(b || 0) / 1024 ** 2).toFixed(Number(b) < 10 * 1024 ** 2 ? 1 : 0) + ' MB';
+const hoursSince = d => d ? (Date.now() - new Date(d)) / 36e5 : 0;
+function healthChecks(hd, ms) {
+  const s = hd.settings || {}, a = hd.auth || {}, st = hd.staff || {}, b = hd.backlog || {}, e = hd.errors || {}, mem = hd.members || {};
+  const ref = (CONFIG.SUPABASE_URL.match(/https:\/\/([a-z0-9]+)\.supabase\.co/) || [])[1];
+  const sb = path => ref ? `https://supabase.com/dashboard/project/${ref}/${path}` : '';
+  const C = [];
+  const add = (lvl, title, detail, link = null) => C.push({ lvl, title, detail, link });
+  add(ms > 1500 ? 'warn' : 'ok', 'Database reachable', `Round trip ${ms} ms${ms > 1500 ? ' — slow. A free project that was paused can take a few seconds to wake up.' : '.'}`);
+  add(hd.schema >= EXPECTED_SCHEMA ? 'ok' : 'bad', 'Database up to date', hd.schema >= EXPECTED_SCHEMA ? `Schema ${hd.schema} matches this app version (${CONFIG.VERSION}).` : `Database is on schema ${hd.schema}, the app expects ${EXPECTED_SCHEMA}. Run the newest migration in supabase/migrations.`);
+  add(s.supportEmail ? 'ok' : 'warn', 'Support e-mail', s.supportEmail ? s.supportEmail : `Not set — the app shows the placeholder ${CONFIG.SUPPORT_EMAIL}. Add a real inbox in App settings.`, { tab: 'settings', label: 'Open settings' });
+  add(s.safetyEmail || s.supportEmail ? 'ok' : 'warn', 'Child-safety contact', s.safetyEmail || s.supportEmail || 'Not set — required by Google Play for dating apps.', { tab: 'settings', label: 'Open settings' });
+  add(s.requireAdminMfa ? 'ok' : 'bad', 'Staff 2FA required', s.requireAdminMfa ? 'Consoles and staff data need an authenticator code.' : 'Turned off — anyone with a staff password can read member data.', { tab: 'settings', label: 'Open settings' });
+  if (!hd.demo) add(st.without2fa?.length ? 'warn' : 'ok', 'Staff 2FA set up', st.without2fa?.length ? `Not enrolled yet: ${st.without2fa.join(', ')}. They're asked the next time they open a console.` : 'Every staff account has an authenticator.');
+  add(st.superadmins >= 2 ? 'ok' : 'warn', 'Backup SuperAdmin', st.superadmins >= 2 ? `${st.superadmins} SuperAdmins.` : 'Only one SuperAdmin. If that account is lost nobody can manage the app — promote a trusted second person.', { tab: 'staff', label: 'Staff & roles' });
+  add(s.maintenance ? 'bad' : 'ok', 'App open to members', s.maintenance ? 'Maintenance mode is ON — members are locked out.' : 'Maintenance mode is off.', s.maintenance ? { tab: 'settings', label: 'Open settings' } : null);
+  add(s.signupsOpen === false ? 'warn' : 'ok', 'New sign-ups', s.signupsOpen === false ? 'Paused — nobody new can join.' : 'Open.', s.signupsOpen === false ? { tab: 'settings', label: 'Open settings' } : null);
+  if (!hd.demo) {
+    const lowConfirm = a.signups7d >= 3 && a.unconfirmed7d / a.signups7d >= 0.5;
+    add(lowConfirm ? 'bad' : a.unconfirmedOld ? 'warn' : 'ok', 'Sign-up e-mails delivered',
+      lowConfirm ? `${a.unconfirmed7d} of ${a.signups7d} people who signed up this week never confirmed. Confirmation e-mails are probably not arriving — set up custom SMTP and check the Site URL in Supabase Auth.`
+        : a.unconfirmedOld ? `${a.unconfirmedOld} account(s) never confirmed their e-mail. Resend from Members → Email not confirmed.` : a.users ? 'New members are confirming their e-mail.' : 'No sign-ups yet.',
+      lowConfirm ? { href: sb('auth/smtp'), label: 'Supabase SMTP' } : a.unconfirmedOld ? { tab: 'members', filter: 'unconfirmed', label: 'Show them' } : null);
+  }
+  const backlog = (n, oldest, what, tab) => add(!n ? 'ok' : hoursSince(oldest) > 24 ? 'bad' : 'warn', what, !n ? 'Nothing waiting.' : `${n} waiting${oldest ? `, oldest ${timeAgo(oldest)}` : ''}. Aim to handle within 24 hours.`, n ? { tab, label: 'Review' } : null);
+  backlog(b.openReports, b.oldestReport, 'Reports', 'reports');
+  backlog(b.pendingVerifications, b.oldestVerification, 'Selfie verifications', 'verify');
+  backlog(b.flagged, b.oldestFlag, 'Scam Shield flags', 'shield');
+  add(!e.last24h ? 'ok' : e.last24h >= 20 ? 'bad' : 'warn', 'App errors (24 h)', !e.last24h ? 'No crashes reported by members\' devices.' : `${e.last24h} error report(s) from members' devices — see the list below.`);
+  if (mem.stuckOnboarding) add('warn', 'Stuck in onboarding', `${mem.stuckOnboarding} member(s) signed up over a day ago but never finished their profile.`, { tab: 'members', filter: 'onboarding', label: 'Show them' });
+  add(Number(hd.dbSize) > DB_LIMIT * 0.8 ? 'warn' : 'ok', 'Database size', `${mb(hd.dbSize)}${hd.demo ? ' (this browser)' : ` of ${mb(DB_LIMIT)} on the free plan`}.`);
+  return C;
+}
+
 const VIEWS = {
+  async health(m) {
+    const t0 = performance.now(); const hd = await api.admin.health(); const ms = Math.round(performance.now() - t0);
+    const C = healthChecks(hd, ms), bad = C.filter(c => c.lvl === 'bad').length, warn = C.filter(c => c.lvl === 'warn').length;
+    healthIssues = bad + warn; refreshCounts();
+    const storageBytes = (hd.storage || []).reduce((n, x) => n + Number(x.bytes || 0), 0);
+    const ICON = { ok: '✓', warn: '!', bad: '✕' };
+    const ref = (CONFIG.SUPABASE_URL.match(/https:\/\/([a-z0-9]+)\.supabase\.co/) || [])[1];
+    m.innerHTML = h`<h1>System health</h1><p class="sub">Checked ${fmtDate(hd.now)} · app v${CONFIG.VERSION} · ${api.mode === 'demo' ? 'demo data in this browser' : 'live database'}</p>
+      <div class="health-sum ${bad ? 'bad' : warn ? 'warn' : 'ok'}"><b>${bad ? `${bad} problem${bad > 1 ? 's' : ''} need attention` : warn ? `Healthy, with ${warn} thing${warn > 1 ? 's' : ''} to look at` : 'All systems healthy'}</b>
+        <button class="btn btn-ghost btn-sm" id="hrefresh">Re-check</button></div>
+      <div class="panel checks">${C.map(c => h`<div class="chk ${c.lvl}"><i aria-hidden="true">${ICON[c.lvl]}</i><div><b>${c.title}</b><span>${c.detail}</span></div>
+        ${c.link?.tab ? h`<button class="btn btn-ghost btn-sm" data-go="${c.link.tab}" data-filter="${c.link.filter || ''}">${c.link.label}</button>` : c.link?.href ? h`<a class="btn btn-ghost btn-sm" href="${c.link.href}" target="_blank" rel="noopener">${c.link.label} ↗</a>` : ''}</div>`)}</div>
+      <div class="kpis">
+        <div class="kpi"><span>Members</span><b>${hd.members?.total ?? 0}</b></div><div class="kpi"><span>Active 7 days</span><b>${hd.members?.active7d ?? 0}</b></div>
+        <div class="kpi"><span>Sign-ups 7 days</span><b>${hd.auth?.signups7d ?? 0}</b></div><div class="kpi"><span>Last sign-up</span><b class="sm">${hd.auth?.lastSignup ? ago(hd.auth.lastSignup) : '—'}</b></div>
+        <div class="kpi"><span>Database</span><b class="sm">${mb(hd.dbSize)}</b></div><div class="kpi"><span>File storage</span><b class="sm">${mb(storageBytes)}</b></div></div>
+      <div class="grid-2">
+        <div class="panel"><h2>Data</h2><table class="tbl"><tbody>${Object.entries(hd.tables || {}).map(([k, v]) => h`<tr><td>${k.replace('_', ' ')}</td><td style="text-align:right"><b>${Number(v).toLocaleString()}</b></td></tr>`)}</tbody></table></div>
+        <div class="panel"><h2>File storage</h2><table class="tbl"><tbody>${(hd.storage || []).map(x => h`<tr><td>${x.bucket}</td><td>${Number(x.files).toLocaleString()} files</td><td style="text-align:right"><b>${mb(x.bytes)}</b></td></tr>`)}</tbody></table>
+          ${hd.demo ? '' : h`<p class="sub" style="margin-top:10px">Free plan: ${mb(STORAGE_LIMIT)} storage, ${mb(DB_LIMIT)} database.</p>`}</div></div>
+      <div class="panel"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><h2 style="margin:0">Errors from members' devices</h2>
+        ${(hd.errors?.recent || []).length ? h`<button class="btn btn-ghost btn-sm" id="hclear" style="flex:0 0 auto">Clear list</button>` : ''}</div>
+        ${(hd.errors?.recent || []).length ? h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Last seen</th><th>Where</th><th>Error</th><th>Times</th></tr></thead><tbody>
+          ${hd.errors.recent.map(x => h`<tr><td style="white-space:nowrap">${ago(x.lastAt)}</td><td>${x.page}${x.version ? h`<br><small class="mono">v${x.version}</small>` : ''}</td><td><details><summary>${x.message}</summary><pre class="mono stack">${x.stack || 'No stack trace'}
+
+${x.ua || ''}</pre></details></td><td><b>${x.count}</b></td></tr>`)}</tbody></table></div>`
+          : h`<p class="sub">No errors reported. Crashes and failed actions on members' phones show up here automatically.</p>`}</div>
+      ${ref ? h`<div class="panel"><h2>Hosting dashboards</h2><p class="sub">Settings that can only be changed outside this console.</p>
+        <div class="row" style="flex-wrap:wrap;gap:8px;flex:0">
+          <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://supabase.com/dashboard/project/${ref}/auth/url-configuration">Auth: Site URL & redirects ↗</a>
+          <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://supabase.com/dashboard/project/${ref}/auth/smtp">Auth: e-mail (SMTP) ↗</a>
+          <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://supabase.com/dashboard/project/${ref}/logs/explorer">Database logs ↗</a>
+          <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://supabase.com/dashboard/project/${ref}/database/backups/scheduled">Backups ↗</a>
+          <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://dashboard.render.com/">Website hosting (Render) ↗</a></div></div>` : ''}`;
+    $('#hrefresh').onclick = reload;
+    $$('[data-go]', m).forEach(b => b.onclick = () => { if (b.dataset.filter) memState.filter = b.dataset.filter; go(b.dataset.go); });
+    if ($('#hclear')) $('#hclear').onclick = () => run(async () => { if (!await ask({ title: 'Clear the error list?', text: 'Do this after fixing the cause. New errors will appear again.', ok: 'Clear' })) return false; await api.admin.clearErrors(); toast('Cleared'); }, reload);
+  },
+
   async overview(m) {
     const s = stats;
     m.innerHTML = h`<h1>Overview</h1><p class="sub">Community health at a glance.</p>
@@ -314,7 +413,7 @@ const VIEWS = {
       ${rs.length ? rs.map(r => h`<div class="item"><div class="top">${userCell(r.subject, r.subject?.email, r.subject?.id)}<span><span class="tag gold">${r.reason}</span> <span class="status ${r.subject?.status}">${r.subject?.status}</span></span></div>
         ${r.details ? h`<q>${r.details}</q>` : ''}
         ${r.message ? h`<div class="quoted"><small>Reported message</small><q>${r.message}</q></div>` : ''}
-        <small style="color:var(--muted)">Reported by ${r.reporter?.name ? '@' + r.reporter.name : r.reporter?.email || 'a deleted member'} · ${timeAgo(r.at)} ago${r.resolution ? ` · handled: ${r.resolution}` : ''}</small>
+        <small style="color:var(--muted)">Reported by ${r.reporter?.name ? '@' + r.reporter.name : r.reporter?.email || 'a deleted member'} · ${ago(r.at)}${r.resolution ? ` · handled: ${r.resolution}` : ''}</small>
         ${r.status === 'open' ? h`<div class="acts"><button class="btn btn-ghost btn-sm" data-r="${r.id}" data-a="dismiss">Dismiss</button><button class="btn btn-ghost btn-sm" data-r="${r.id}" data-a="warn">Warn</button><button class="btn btn-danger btn-sm" data-r="${r.id}" data-a="suspend">Suspend…</button><button class="btn btn-danger btn-sm" data-r="${r.id}" data-a="ban">Ban</button></div>` : ''}</div>`)
         : h`<div class="panel" style="text-align:center;color:var(--muted)">Nothing here 🎉</div>`}`;
     $('#rf').onclick = e => { const b = e.target.closest('[data-s]'); if (b) VIEWS.reports(m, b.dataset.s); };
@@ -340,7 +439,7 @@ const VIEWS = {
   async verify(m) {
     const vs = await api.admin.verifications();
     m.innerHTML = h`<h1>Verification</h1><p class="sub">Approve only if the selfie clearly shows the same person doing a thumbs-up.</p>
-      ${vs.length ? vs.map(p => h`<div class="item"><div class="top">${userCell(p, p.email)}<span style="color:var(--muted);font-size:13px">${ageOf(p.dob) || ''} · ${flagOf(p.country)} ${p.city || ''}</span></div>
+      ${vs.length ? vs.map(p => h`<div class="item"><div class="top">${userCell(p, p.email)}<span style="color:var(--muted);font-size:13px">${ageOf(p.dob) || ''} · ${flagOf(p.country)} ${p.city || ''}${p.requestedAt ? h` · <span class="${Date.now() - new Date(p.requestedAt) > 864e5 ? 'warn-txt' : ''}">${timeAgo(p.requestedAt) === 'now' ? 'just sent' : 'waiting ' + timeAgo(p.requestedAt)}</span>` : ''}</span></div>
         <div class="verify-pair"><div style="${bg(p.verificationSelfie)}"><span class="tag gold">Selfie</span></div><div style="${bg((p.photos || [])[0])}"><span class="tag">Profile</span></div></div>
         <div class="acts"><button class="btn btn-primary btn-sm" data-v="${p.id}" data-ok="1">Approve ✓</button><button class="btn btn-danger btn-sm" data-v="${p.id}" data-ok="">Reject</button></div></div>`)
         : h`<div class="panel" style="text-align:center;color:var(--muted)">No pending verifications.</div>`}`;
@@ -351,7 +450,7 @@ const VIEWS = {
     const fs = await api.admin.flagged();
     m.innerHTML = h`<h1>Scam Shield</h1><p class="sub">Messages automatically flagged for money requests, payment apps, crypto, gift cards or off-platform contact.</p>
       ${fs.length ? fs.map(x => h`<div class="item"><div class="top">${userCell({ firstName: x.sender?.name ? '@' + x.sender.name : 'Member', id: x.sender?.id }, x.sender?.email, x.sender?.id)}<span>${x.flagged.map(f => h`<span class="tag gold" style="margin-left:4px">${f}</span>`)}</span></div>
-        <q>${x.body}</q><small style="color:var(--muted)">${timeAgo(x.at)} ago · sender is <span class="status ${x.sender?.status}">${x.sender?.status}</span></small>
+        <q>${x.body}</q><small style="color:var(--muted)">${ago(x.at)} · sender is <span class="status ${x.sender?.status}">${x.sender?.status}</span></small>
         <div class="acts"><button class="btn btn-ghost btn-sm" data-c="${x.id}">Looks fine</button><button class="btn btn-ghost btn-sm" data-w="${x.sender?.id}" data-c2="${x.id}">Warn sender</button><button class="btn btn-danger btn-sm" data-s="${x.sender?.id}" data-c2="${x.id}" data-st="suspend">Suspend sender…</button><button class="btn btn-danger btn-sm" data-s="${x.sender?.id}" data-c2="${x.id}" data-st="ban">Ban sender</button></div></div>`)
         : h`<div class="panel" style="text-align:center;color:var(--muted)">No flagged messages.</div>`}`;
     $$('[data-c]', m).forEach(b => b.onclick = () => run(async () => { await api.admin.clearFlag(b.dataset.c); toast('Cleared'); }, reload));
@@ -360,7 +459,7 @@ const VIEWS = {
   },
 
   async members(m) {
-    const FILTERS = [['all', 'All'], ['active', 'Active'], ['reported', 'Open reports'], ['suspended', 'Suspended'], ['banned', 'Banned'], ['pending', 'Awaiting verification'], ['verified', 'Verified'], ['unverified', 'Not verified'], ['staff', 'Staff']];
+    const FILTERS = [['all', 'All'], ['active', 'Active'], ['reported', 'Open reports'], ['suspended', 'Suspended'], ['banned', 'Banned'], ['pending', 'Awaiting verification'], ['verified', 'Verified'], ['unverified', 'Not verified'], ['unconfirmed', 'Email not confirmed'], ['onboarding', 'Still onboarding'], ['staff', 'Staff']];
     m.innerHTML = h`<h1>Members</h1><p class="sub">Search by name, username, email, city or country. Click a member for their profile, history and moderation tools.</p>
       <div class="search"><input class="input" id="q" placeholder="Search members…" value="${memState.q}" aria-label="Search members">${superHere() ? h`<button class="btn btn-ghost" id="csv">Export CSV</button>` : ''}</div>
       <div class="chips" id="mf" style="margin-bottom:14px">${FILTERS.map(([k, l]) => h`<button class="chip" data-f="${k}" aria-pressed="${k === memState.filter}">${l}</button>`)}</div>
@@ -369,8 +468,8 @@ const VIEWS = {
     const draw = async () => {
       rows = await api.admin.members(memState.q, memState.filter);
       $('#ul').innerHTML = rows.length ? h`<p class="sub" style="margin:0 0 8px">${rows.length}${rows.length >= 500 ? '+' : ''} member${rows.length === 1 ? '' : 's'}</p><div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Member</th><th>Location</th><th>Joined</th><th>Last active</th><th>Status</th><th></th></tr></thead><tbody>
-        ${rows.map(u => h`<tr><td>${userCell(u.profile, u.email, u.id)}</td><td>${u.profile?.city || u.profile?.country ? h`${flagOf(u.profile.country)} ${u.profile.city || u.profile.country}` : '—'}</td><td>${timeAgo(u.createdAt)} ago</td><td>${u.lastActive ? timeAgo(u.lastActive) + ' ago' : '—'}</td>
-          <td>${statusPill(u)}${u.role !== 'user' ? h` <span class="status ${u.role}">${u.role}</span>` : ''}${u.openReports ? h` <span class="tag gold">${u.openReports} report${u.openReports > 1 ? 's' : ''}</span>` : ''}${u.profile?.verificationStatus === 'pending' ? h` <span class="tag blue">verify</span>` : ''}</td>
+        ${rows.map(u => h`<tr><td>${userCell(u.profile, u.email, u.id)}</td><td>${u.profile?.city || u.profile?.country ? h`${flagOf(u.profile.country)} ${u.profile.city || u.profile.country}` : '—'}</td><td>${ago(u.createdAt)}</td><td>${u.lastActive ? ago(u.lastActive) : '—'}</td>
+          <td>${statusPill(u)}${u.role !== 'user' ? h` <span class="status ${u.role}">${u.role}</span>` : ''}${u.openReports ? h` <span class="tag gold">${u.openReports} report${u.openReports > 1 ? 's' : ''}</span>` : ''}${u.profile?.verificationStatus === 'pending' ? h` <span class="tag blue">verify</span>` : ''}${u.emailConfirmed === false ? h` <span class="tag">email unconfirmed</span>` : ''}</td>
           <td><button class="btn btn-ghost btn-sm" data-member="${u.id}">Open</button></td></tr>`)}</tbody></table></div>`
         : h`<div class="panel" style="text-align:center;color:var(--muted)">No members match.</div>`;
     };
@@ -402,7 +501,7 @@ const VIEWS = {
     const us = await api.admin.members('', 'staff');
     m.innerHTML = h`<h1>Staff & roles</h1><p class="sub">Admins moderate members. SuperAdmins also manage staff, app settings, analytics, account deletion and the audit log.</p>
       <div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Staff</th><th>Role</th><th>Last active</th><th></th></tr></thead><tbody>
-        ${us.map(u => h`<tr><td>${userCell(u.profile, u.email, u.id)}</td><td><span class="status ${u.role}">${u.role}</span>${u.status !== 'active' ? h` ${statusPill(u)}` : ''}</td><td>${u.lastActive ? timeAgo(u.lastActive) + ' ago' : '—'}</td><td style="white-space:nowrap">${u.id === session.id ? h`<small style="color:var(--muted)">you</small>` : h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="user">Remove staff</button> ${u.role === 'admin' ? h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="superadmin">Make SuperAdmin</button>` : h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="admin">Make Admin</button>`}`}</td></tr>`)}</tbody></table></div>
+        ${us.map(u => h`<tr><td>${userCell(u.profile, u.email, u.id)}</td><td><span class="status ${u.role}">${u.role}</span>${u.status !== 'active' ? h` ${statusPill(u)}` : ''}</td><td>${u.lastActive ? ago(u.lastActive) : '—'}</td><td style="white-space:nowrap">${u.id === session.id ? h`<small style="color:var(--muted)">you</small>` : h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="user">Remove staff</button> ${u.role === 'admin' ? h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="superadmin">Make SuperAdmin</button>` : h`<button class="btn btn-ghost btn-sm" data-id="${u.id}" data-role="admin">Make Admin</button>`}`}</td></tr>`)}</tbody></table></div>
       <div class="panel"><h2>Promote a member</h2><p class="sub">They'll need to set up an authenticator app the first time they open a console.</p><div class="search"><input class="input" id="pq" placeholder="Search by email, name or username"></div><div id="pr"></div></div>`;
     const ROLE_TXT = { user: 'remove their staff access', admin: 'make them an Admin (moderation)', superadmin: 'make them a SuperAdmin (full control)' };
     const bind = root => $$('[data-role]', root).forEach(b => b.onclick = () => run(async () => {
@@ -426,6 +525,9 @@ const VIEWS = {
       <div class="panel"><h2>Discovery limits</h2><div class="set-grid">${num('dailyLikes', 'Daily likes per member', 'Keeps likes meaningful and reduces spam.')}${num('dailySuperLikes', 'Daily Oya! super likes', 'Super likes jump the queue.', 0, 100)}${num('minAge', 'Minimum age', 'Never below 18.', 18, 99)}</div></div>
       <div class="panel"><h2>Access</h2>${tog('signupsOpen', 'New sign-ups open', 'Turn off to pause new registrations (existing members can still log in).')}${tog('maintenance', 'Maintenance mode', 'Members see a "be right back" screen. Staff can still sign in.')}${tog('requireAdminMfa', 'Require 2FA for staff', 'Authenticator app required for consoles and staff data (live mode). Strongly recommended.')}</div>
       <div class="panel"><h2>Safety & features</h2>${tog('scamShield', 'Scam Shield', 'Flag money requests, payment apps and off-platform contact in chat.')}${tog('undoEnabled', 'Undo last swipe', 'Let members bring back their last swipe.')}</div>
+      <div class="panel"><h2>Contact details</h2><p class="sub" style="margin-top:-6px">Shown in Help & support and on the policy pages. Google Play requires a support e-mail you actually read.</p><div class="set-grid">
+        <label class="field"><span>Support e-mail</span><input class="input" type="email" data-k="supportEmail" value="${s.supportEmail || ''}" placeholder="${CONFIG.SUPPORT_EMAIL}" autocomplete="off"></label>
+        <label class="field"><span>Safety / child-safety e-mail</span><input class="input" type="email" data-k="safetyEmail" value="${s.safetyEmail || ''}" placeholder="${CONFIG.SAFETY_EMAIL || CONFIG.SUPPORT_EMAIL}" autocomplete="off"></label></div></div>
       <div class="panel"><h2>Announcement banner</h2><label class="field"><span>Shown at the top of Discover (leave empty to hide)</span><input class="input" data-k="announcement" maxlength="280" value="${s.announcement}"></label></div>
       <button class="btn btn-primary" id="save">Save settings</button>
       ${api.mode === 'demo' ? h`<button class="btn btn-danger" id="reset" style="margin-left:10px">Reset demo data</button>` : ''}`;

@@ -7,6 +7,8 @@ import { I } from './icons.js';
 import { COUNTRIES } from './geo-data.js';
 import { detectLocation, USERNAME_RE, normalizeUsername } from './geo.js';
 import { debounce } from './util.js';
+import { CONFIG } from './config.js';
+import { installErrorReporting } from './errors.js';
 
 let api, session, me, settings, autoLocateRef = () => {};
 const S = { mode: localStorage.getItem('slc_mode') || 'worldwide', deck: [], deckLoaded: false, lastSwiped: null, likes: [], matches: [], unread: 0, likeCount: 0, chatUnsub: null };
@@ -26,6 +28,8 @@ async function boot() {
   else if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
   $('#yr').textContent = new Date().getFullYear();
   api = await getApi();
+  installErrorReporting(api, 'app');
+  api.onRecovery?.(() => { S.recovery = true; if (me) passwordSheet(true); });
   settings = await api.settings();
   session = await api.session();
   if (api.mode === 'demo') $('#demo-note').classList.remove('hidden');
@@ -64,7 +68,14 @@ function bindLanding() {
       session = await api.signIn({ email: f.get('email'), password: f.get('password') });
       session = await api.session();
       await enter();
-    } catch (err) { $('#login-err').textContent = err.message; }
+    } catch (err) {
+      const box = $('#login-err'); box.textContent = err.message;
+      if (err.code === 'email_not_confirmed') {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.textContent = ' Resend the confirmation email';
+        b.onclick = async () => { try { const r = await api.resendConfirmation(f.get('email')); toast(r?.note || 'Confirmation email sent.'); } catch (x) { box.textContent = x.message; } };
+        box.append(b);
+      }
+    }
     btn.disabled = false;
   };
   $('#forgot').onclick = async () => {
@@ -143,7 +154,7 @@ function bindLanding() {
       session = await api.session();
       if (!session) { err.textContent = ''; toast('Check your email to confirm your account, then log in.'); setTab('login'); btn.disabled = false; return; }
       await enter();
-    } catch (x) { err.textContent = /database error/i.test(x.message) ? (settings.signupsOpen === false ? 'New sign-ups are paused right now. Please try again later.' : 'We couldn\'t create your account — that username may have just been taken. Try another.') : x.message; }
+    } catch (x) { err.textContent = x.code === 'signup_rejected' || /database error/i.test(x.message) ? (settings.signupsOpen === false ? 'New sign-ups are paused right now. Please try again later.' : 'We couldn\'t create your account — that username may have just been taken. Try another.') : x.message; }
     btn.disabled = false;
   };
 }
@@ -370,7 +381,8 @@ function shell() {
 function route() {
   S.chatUnsub?.(); S.chatUnsub = null;
   closeSheet();
-  if (me?.notice) setTimeout(showNotice, 0); // shown on every screen until acknowledged
+  if (S.recovery) setTimeout(() => passwordSheet(true), 0); // finish the password reset first
+  else if (me?.notice) setTimeout(showNotice, 0); // shown on every screen until acknowledged
   const [, r = 'discover', arg] = location.hash.match(/^#\/([a-z]+)\/?(.*)$/) || [];
   $$('.nav a').forEach(a => a.setAttribute('aria-current', a.dataset.r === r || (r === 'chat' && a.dataset.r === 'chats') ? 'page' : 'false'));
   $('.nav').classList.toggle('hidden', r === 'chat');
@@ -559,6 +571,52 @@ function closeSheet() {
   bgEl.classList.remove('show'); sh.classList.remove('show');
   setTimeout(() => { bgEl.remove(); sh.remove(); }, 320);
   onClose?.();
+}
+
+// In-app confirmation (native confirm()/prompt() look broken inside the Android app).
+function confirmSheet({ title, text, ok = 'Confirm', danger = true, typeWord = '' }) {
+  return new Promise(res => {
+    let done = false;
+    const sh = openSheet(h`<div class="pad"><h2 style="font-family:var(--display);margin:0 0 6px">${title}</h2><p style="color:var(--muted)">${text}</p>
+      ${typeWord ? h`<label class="field"><span>Type ${typeWord} to confirm</span><input class="input" id="cf-w" autocomplete="off" autocapitalize="characters"></label>` : ''}
+      <div class="err" id="cf-err" role="alert"></div>
+      <div class="row" style="gap:10px"><button class="btn btn-ghost" id="cf-no" style="flex:1">Cancel</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cf-ok" style="flex:1">${ok}</button></div></div>`, () => { if (!done) res(false); });
+    $('#cf-no', sh).onclick = () => closeSheet();
+    $('#cf-ok', sh).onclick = () => {
+      if (typeWord && $('#cf-w', sh).value.trim() !== typeWord) { $('#cf-err', sh).textContent = `Type ${typeWord} exactly to confirm.`; return; }
+      done = true; res(true); closeSheet();
+    };
+  });
+}
+
+// Change password (from Settings) or finish a password reset (after opening the e-mailed link).
+function passwordSheet(recovery = false) {
+  const sh = openSheet(h`<form class="pad" id="pw-f" novalidate><h2 style="font-family:var(--display);margin:0 0 6px">${recovery ? 'Choose a new password' : 'Change password'}</h2>
+    <p style="color:var(--muted)">${recovery ? 'You opened a password-reset link. Set a new password to finish.' : 'Use at least 8 characters. You stay logged in on this device.'}</p>
+    <label class="field"><span>New password</span><input class="input" type="password" name="pw" autocomplete="new-password" minlength="8" required></label>
+    <label class="field"><span>Confirm new password</span><input class="input" type="password" name="pw2" autocomplete="new-password" required></label>
+    <div class="err" id="pw-err" role="alert"></div>
+    <button class="btn btn-primary btn-block">Save password</button></form>`);
+  $('#pw-f', sh).onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), err = $('#pw-err', sh), btn = e.target.querySelector('button');
+    if (String(f.get('pw')).length < 8) { err.textContent = 'Use at least 8 characters.'; return; }
+    if (f.get('pw') !== f.get('pw2')) { err.textContent = 'The passwords don\'t match.'; return; }
+    btn.disabled = true;
+    try { await api.updatePassword(f.get('pw')); S.recovery = false; closeSheet(); toast('Password updated ✓'); }
+    catch (x) { err.textContent = x.message; btn.disabled = false; }
+  };
+}
+
+function helpSheet() {
+  const support = settings?.supportEmail || CONFIG.SUPPORT_EMAIL, safety = settings?.safetyEmail || CONFIG.SAFETY_EMAIL || support;
+  const sh = openSheet(h`<div class="pad"><h2 style="font-family:var(--display);margin:0 0 6px">Help & support</h2>
+    <p style="color:var(--muted)">We usually reply within 24 hours.</p>
+    <a class="list-btn" href="mailto:${support}?subject=${encodeURIComponent('Sierra Leone Connect help')}"><span>Email support<br><small>${support}</small></span><span>›</span></a>
+    <a class="list-btn" href="mailto:${safety}?subject=${encodeURIComponent('Safety concern')}"><span>Report a safety concern<br><small>${safety}</small></span><span>›</span></a>
+    <button class="list-btn" id="hp-safety"><span>Safety centre<br><small>Dating safely, spotting scams</small></span><span>›</span></button>
+    <p class="fine" style="margin-top:14px">In danger right now? Contact local emergency services first. · v${CONFIG.VERSION}</p></div>`);
+  $('#hp-safety', sh).onclick = () => infoSheet('safety');
 }
 
 function profileBody(p, { mine = false, likeable = false } = {}) {
@@ -774,7 +832,9 @@ async function renderChat(id) {
       if (x === 'view') openProfile(o);
       if (x === 'safety') infoSheet('safety');
       if (x === 'report') reportSheet(o);
-      if (x === 'unmatch' && confirm(`Unmatch ${o.name}? This removes the conversation for both of you.`)) { await api.unmatch(id); toast('Unmatched'); location.hash = '#/chats'; }
+      if (x === 'unmatch' && await confirmSheet({ title: `Unmatch ${o.name}?`, text: 'This removes the conversation for both of you. It can\'t be undone.', ok: 'Unmatch' })) {
+        try { await api.unmatch(id); toast('Unmatched'); location.hash = '#/chats'; } catch (e) { toast(e.message, 'error'); }
+      }
     };
     setTimeout(() => document.addEventListener('click', () => mm.remove(), { once: true }), 0);
   };
@@ -897,9 +957,11 @@ async function renderMe() {
     <section class="card-sec"><h3>Settings</h3>
       <button class="list-btn" id="me-prefs"><span>Discovery filters<br><small>Ages ${fullPrefs(me).ageMin}–${fullPrefs(me).ageMax} · ${(fullPrefs(me).seeking || []).map(x => x === 'woman' ? 'Women' : 'Men').join(' & ') || 'Everyone'}</small></span><span>›</span></button>
       <label class="switch-row"><span>Pause my profile<small>Hide from Discover. Your matches stay.</small></span><span class="toggle"><input type="checkbox" id="me-pause" ${me.paused ? 'checked' : ''}><span></span></span></label>
+      <button class="list-btn" id="me-pw"><span>Change password<br><small>${me.email || session?.email || ''}</small></span><span>›</span></button>
+      <button class="list-btn" id="me-help"><span>Help & support<br><small>Contact the Sierra Leone Connect team</small></span><span>›</span></button>
       <button class="list-btn" id="me-out">Log out</button>
       <button class="list-btn" id="me-del" style="color:#FF8A8A">Delete account</button></section>
-    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v1.3</p>`;
+    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v${CONFIG.VERSION}</p>`;
   $('#me-prev').onclick = () => bindVoice(openSheet(profileBody({ ...me, name: me.username || me.name }, { mine: true })));
   $$('[data-edit]', v).forEach(b => b.onclick = () => b.dataset.edit === 'questions' ? questionsSheet() : b.dataset.edit === 'voice' ? voiceIntroSheet() : editSheet(b.dataset.edit));
   $('#me-prefs').onclick = prefsSheet;
@@ -907,9 +969,10 @@ async function renderMe() {
   $$('.js-i', v).forEach(a => a.onclick = e => { e.preventDefault(); infoSheet(a.dataset.i); });
   $('#me-pause').onchange = async e => { me = await api.saveProfile({ paused: e.target.checked }); toast(e.target.checked ? 'Profile paused — you are hidden from Discover.' : 'Welcome back! You are visible again.'); };
   $('#me-out').onclick = () => logout();
+  $('#me-pw').onclick = () => passwordSheet(false);
+  $('#me-help').onclick = helpSheet;
   $('#me-del').onclick = async () => {
-    if (!confirm('Delete your account permanently? Your profile, matches and messages will be erased.')) return;
-    if (prompt('Type DELETE to confirm') !== 'DELETE') return;
+    if (!await confirmSheet({ title: 'Delete your account?', text: 'Your profile, photos, matches and messages are erased permanently. This can\'t be undone.', ok: 'Delete forever', typeWord: 'DELETE' })) return;
     try { await api.deleteAccount(); toast('Your account has been deleted.'); logout(); } catch (e) { toast(e.message, 'error'); }
   };
   $('#me-verify').onclick = () => {

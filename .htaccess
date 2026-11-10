@@ -28,7 +28,7 @@ DirectoryIndex index.html
     Header set Cache-Control "no-cache, no-store, must-revalidate"
   </FilesMatch>
   <FilesMatch "\.(css|js)$">
-    Header set Cache-Control "public, max-age=3600"
+    Header set Cache-Control "no-cache"
   </FilesMatch>
   <FilesMatch "\.(png|svg|jpg|webp|ico)$">
     Header set Cache-Control "public, max-age=2592000"
