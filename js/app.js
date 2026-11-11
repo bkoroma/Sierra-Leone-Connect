@@ -8,6 +8,7 @@ import { COUNTRIES } from './geo-data.js';
 import { detectLocation, USERNAME_RE, normalizeUsername } from './geo.js';
 import { debounce } from './util.js';
 import { CONFIG } from './config.js';
+import { TERMS_VERSION } from './constants.js';
 import { installErrorReporting } from './errors.js';
 
 let api, session, me, settings, autoLocateRef = () => {};
@@ -146,11 +147,12 @@ function bindLanding() {
     if (f.get('password') !== f.get('password2')) { err.textContent = 'Passwords don\'t match.'; pw2.focus(); return; }
     if (!dob || ageOf(dob) < (settings.minAge || 18)) { err.textContent = `You must be ${settings.minAge || 18} or older to join.`; return; }
     if (!f.get('agree')) { err.textContent = 'Please confirm you are 18+ and agree to the terms.'; return; }
+    if (!f.get('sensitive')) { err.textContent = 'Please agree to how we use the details you share for matching.'; return; }
     if (settings.signupsOpen === false) { err.textContent = 'New sign-ups are paused right now. Please try again later.'; return; }
     btn.disabled = true;
     try {
       if (!(await api.usernameAvailable(username))) { err.textContent = `@${username} is taken — try another.`; btn.disabled = false; return; }
-      await api.signUp({ email: f.get('email'), password: f.get('password'), dob, gender, firstName, lastName, username, country, city: geo.city, lat: geo.lat, lng: geo.lng });
+      await api.signUp({ email: f.get('email'), password: f.get('password'), dob, gender, firstName, lastName, username, country, city: geo.city, lat: geo.lat, lng: geo.lng, termsVersion: TERMS_VERSION, sensitiveConsent: true });
       session = await api.session();
       if (!session) { err.textContent = ''; toast('Check your email to confirm your account, then log in.'); setTab('login'); btn.disabled = false; return; }
       await enter();
@@ -169,13 +171,55 @@ async function enter() {
   }
   if (settings.maintenance && !['admin', 'superadmin'].includes(session.role)) {
     $('#landing').classList.add('hidden');
-    $('#root').innerHTML = `<div class="empty" style="padding-top:20vh"><div class="big">🛠️</div><h3>We'll be right back</h3><p>Sierra Leone Connect is getting an upgrade. Please check back soon.</p></div>`;
+    $('#root').innerHTML = `<div class="empty" style="padding-top:20vh"><div class="big">🛠️</div><h1>We'll be right back</h1><p>Sierra Leone Connect is getting an upgrade. Please check back soon.</p></div>`;
     return;
   }
   me = await api.me();
   $('#landing').classList.add('hidden');
+  if (me.termsVersion !== TERMS_VERSION || !me.sensitiveConsentAt) { if (!await consentGate()) return; }
   if (!me.onboarded) return onboarding();
   shell();
+}
+
+// Members confirm the current Terms/Privacy (and the sensitive-data consent) before using the app,
+// and again whenever the terms change. Consent is recorded server-side with a timestamp and version.
+function consentGate() {
+  return new Promise(res => {
+    const isNew = !me.termsAcceptedAt;
+    const sh = openSheet(h`<form class="pad" id="cg" novalidate><h2 style="font-family:var(--display);margin:0 0 6px">${isNew ? 'Before you start' : 'We\'ve updated our terms'}</h2>
+      <p style="color:var(--muted);margin:0 0 12px">${isNew ? 'Please confirm these so we can set up your profile.' : 'Please review and accept them to keep using Sierra Leone Connect.'}</p>
+      <ul class="cg-list"><li>Sierra Leone Connect is <b>free</b> and for <b>adults 18+</b> only.</li><li>Other members see your username, never your full name.</li>
+        <li>We never sell your data or show third-party ads. You can download or delete your data any time in Settings.</li></ul>
+      <label class="switch-row cg-row"><span>I'm 18+ and agree to the <a href="terms.html" target="_blank" rel="noopener" class="link">Terms</a> and <a href="privacy.html" target="_blank" rel="noopener" class="link">Privacy Policy</a>.</span><span class="toggle"><input type="checkbox" name="terms" required><span></span></span></label>
+      <label class="switch-row cg-row"><span>I agree that Sierra Leone Connect can use details I choose to share — like my faith, heritage and who I'm interested in — to find my matches.</span><span class="toggle"><input type="checkbox" name="sensitive" required><span></span></span></label>
+      <div class="err" id="cg-err" role="alert"></div>
+      <button class="btn btn-primary btn-block">Agree and continue</button>
+      <div class="row" style="justify-content:center;gap:18px;margin-top:12px;flex:0"><button type="button" class="link" id="cg-out">Log out</button><a class="link" href="delete-account.html">Delete my account</a></div></form>`);
+    sh.dataset.locked = '1';
+    $('#cg-out', sh).onclick = () => { delete sh.dataset.locked; closeSheet(); res(false); logout(); };
+    $('#cg', sh).onsubmit = async e => {
+      e.preventDefault(); const f = new FormData(e.target);
+      if (!f.get('terms') || !f.get('sensitive')) { $('#cg-err', sh).textContent = 'Please switch on both to continue.'; return; }
+      try { await api.acceptTerms(TERMS_VERSION, true); me = await api.me(); delete sh.dataset.locked; closeSheet(); res(true); }
+      catch (x) { $('#cg-err', sh).textContent = x.message; }
+    };
+  });
+}
+
+// "Download my data" — a JSON copy of everything we hold about the member.
+async function downloadMyData() {
+  try {
+    const data = await api.exportData();
+    const json = JSON.stringify(data, null, 2), name = `sierra-leone-connect-data-${new Date().toISOString().slice(0, 10)}.json`;
+    if (window.Capacitor?.isNativePlatform?.()) {
+      await navigator.clipboard.writeText(json);
+      toast('Your data was copied — paste it into a note or email to save it.');
+      return;
+    }
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([json], { type: 'application/json' })), download: name });
+    document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast('Your data is downloading ✓');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // A warning from the moderators. It keeps coming back until the member taps "I understand".
@@ -225,7 +269,7 @@ const chipToggle = (wrap, arr, max, onChange) => wrap.addEventListener('click', 
   if (k >= 0) arr.splice(k, 1); else { if (max && arr.length >= max) return toast(`Pick up to ${max}.`); arr.push(v); }
   b.setAttribute('aria-pressed', arr.includes(v)); onChange?.();
 });
-const chips = (list, sel) => list.map(v => h`<button type="button" class="chip" data-v="${v}" aria-pressed="${sel.includes(v)}">${v}</button>`);
+const chips = (list, sel) => list.map(v => h`<button type="button" class="chip" data-v="${v}" aria-pressed="${String(sel.includes(v))}">${v}</button>`);
 const opts = (list, v) => list.map(x => h`<option ${x === v ? 'selected' : ''}>${x}</option>`);
 
 const STEP = {
@@ -236,8 +280,8 @@ const STEP = {
       el.innerHTML = h`<h1>Let's start with you</h1><p class="sub">Members see your username${o.username ? h` (@${o.username})` : ''} — your name stays private.</p>
         <label class="field"><span>First name (private)</span><input class="input" id="f-name" maxlength="30" value="${o.name || ''}" autocomplete="given-name"></label>
         <label class="field"><span>Date of birth</span><input class="input" type="date" id="f-dob" value="${o.dob || ''}"></label>
-        <div class="field"><span>I am a</span><div class="chips" id="f-gender">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${o.gender === g}">${g === 'woman' ? 'Woman' : 'Man'}</button>`)}</div></div>
-        <div class="field"><span>Show me</span><div class="chips" id="f-seek">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${(o.prefs.seeking || []).includes(g)}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>
+        <div class="field"><span>I am a</span><div class="chips" id="f-gender">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${String(o.gender === g)}">${g === 'woman' ? 'Woman' : 'Man'}</button>`)}</div></div>
+        <div class="field"><span>Show me</span><div class="chips" id="f-seek">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${String((o.prefs.seeking || []).includes(g))}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>
         <div class="row"><label class="field"><span>Job (optional)</span><input class="input" id="f-job" maxlength="50" value="${o.job || ''}"></label><label class="field"><span>Height cm (optional)</span><input class="input" id="f-h" type="number" min="120" max="230" value="${o.heightCm || ''}"></label></div>
         <label class="field"><span>Education (optional)</span><input class="input" id="f-edu" maxlength="60" value="${o.education || ''}"></label>`;
       $('#f-name', el).oninput = e => o.name = e.target.value.trim();
@@ -298,7 +342,7 @@ const STEP = {
   intent: {
     render(el, o) {
       el.innerHTML = h`<h1>What are you looking for?</h1><p class="sub">We'll put people who want the same thing first.</p>
-        <div id="f-int" style="display:grid;gap:10px">${INTENTS.map(t => h`<button type="button" class="chip" style="text-align:left;padding:16px;border-radius:16px;font-size:16px" data-v="${t.id}" aria-pressed="${o.intent === t.id}">${t.icon} ${t.label}</button>`)}</div>`;
+        <div id="f-int" style="display:grid;gap:10px">${INTENTS.map(t => h`<button type="button" class="chip" style="text-align:left;padding:16px;border-radius:16px;font-size:16px" data-v="${t.id}" aria-pressed="${String(o.intent === t.id)}">${t.icon} ${t.label}</button>`)}</div>`;
       $('#f-int', el).onclick = e => { const b = e.target.closest('.chip'); if (!b) return; o.intent = b.dataset.v; $$('#f-int .chip', el).forEach(c => c.setAttribute('aria-pressed', c === b)); };
     },
     validate: o => !o.intent ? 'Choose what you are looking for.' : ''
@@ -320,7 +364,7 @@ const STEP = {
         const next = core.find(q => !o._answers[q.id] && !(o._skipped || []).includes(q.id));
         el.innerHTML = h`<h1>Quick compatibility check</h1><p class="sub">Answer at least 5. We use these to find people who share your values — and hide dealbreakers.</p>
           <div class="progress"><i style="width:${done / core.length * 100}%"></i></div><p class="tip" style="margin:-4px 0 12px">${done} of ${core.length} answered</p><div id="qbox"></div>`;
-        if (!next) { $('#qbox', el).innerHTML = h`<div class="empty" style="padding:20px"><div class="big">🎯</div><h3>Nice!</h3><p>You can answer ${QUESTIONS.length - core.length}+ more anytime from your profile.</p></div>`; return; }
+        if (!next) { $('#qbox', el).innerHTML = h`<div class="empty" style="padding:20px"><div class="big">🎯</div><h2>Nice!</h2><p>You can answer ${QUESTIONS.length - core.length}+ more anytime from your profile.</p></div>`; return; }
         questionEditor($('#qbox', el), next, o._answers[next.id], async ans => {
           await api.saveAnswer(next.id, ans); o._answers[next.id] = ans; draw();
         }, () => { (o._skipped ||= []).push(next.id); draw(); });
@@ -331,7 +375,7 @@ const STEP = {
   },
   prompts: {
     render(el, o) {
-      el.innerHTML = h`<h1>Show your personality</h1><p class="sub">Answer at least 2. Good answers get 3× more messages.</p>
+      el.innerHTML = h`<h1>Show your personality</h1><p class="sub">Answer at least 2. Good answers give people something to talk about.</p>
         ${o.prompts.map((p, k) => h`<div class="prompt-card"><select class="input" data-k="${k}">${opts(PROMPTS, p.q)}</select><textarea class="input" data-k="${k}" maxlength="160" placeholder="Your answer…">${p.a}</textarea></div>`)}`;
       $$('select', el).forEach(s => s.onchange = () => o.prompts[s.dataset.k].q = s.value);
       $$('textarea', el).forEach(t => t.oninput = () => o.prompts[t.dataset.k].a = t.value.trim());
@@ -409,11 +453,11 @@ const banners = () => [
 // ───────────────────────── Discover ─────────────────────────
 async function renderDiscover() {
   const v = $('#view');
-  v.innerHTML = h`<header class="topbar"><h2>Discover</h2><div class="row" style="flex:0;gap:8px"><span class="streak" id="streak" title="Daily streak">${raw(I.flame)} ${me.streak || 1}</span><button class="iconbtn" id="prefs-btn" aria-label="Discovery filters">${raw(I.sliders)}</button></div></header>
+  v.innerHTML = h`<header class="topbar"><h1>Discover</h1><div class="row" style="flex:0;gap:8px"><span class="streak" id="streak" title="Daily streak">${raw(I.flame)} ${me.streak || 1}</span><button class="iconbtn" id="prefs-btn" aria-label="Discovery filters">${raw(I.sliders)}</button></div></header>
     <div style="position:absolute;inset:62px 0 0;display:flex;flex-direction:column">
       ${banners()}
       <div id="dq"></div>
-      <div class="modes" role="tablist">${DECK_MODES.map(m => h`<button class="chip" role="tab" data-mode="${m.id}" aria-pressed="${S.mode === m.id}">${m.icon} ${m.label}</button>`)}</div>
+      <div class="modes" role="group" aria-label="Who to show">${DECK_MODES.map(m => h`<button class="chip" data-mode="${m.id}" aria-pressed="${S.mode === m.id ? 'true' : 'false'}">${m.icon} ${m.label}</button>`)}</div>
       <div class="deck" id="deck"><div class="spinner"></div></div>
       <div class="actions" id="acts">
         <button class="act sm undo" data-a="undo" aria-label="Undo">${raw(I.undo)}</button>
@@ -458,7 +502,7 @@ function cardHTML(p, top) {
     ${S.likedMe?.has(p.id) && completeness(me) >= 60 ? h`<span class="tag gold liked-you">${raw(I.heart.replace('<svg', '<svg width="12" height="12"'))} Likes you</span>` : ''}
     <span class="stamp like">LIKE</span><span class="stamp nope">NOPE</span><span class="stamp oya">OYA!</span>
     <div class="info">
-      <h3>${nameAge(p)} ${vbadge(p)} ${isOnline(p.lastActive) ? h`<span class="tag green" style="font-size:11px">● Online</span>` : ''}${p._new ? h`<span class="tag blue" style="font-size:11px">New here 👋</span>` : ''}</h3>
+      <h2>${nameAge(p)} ${vbadge(p)} ${isOnline(p.lastActive) ? h`<span class="tag green" style="font-size:11px">● Online</span>` : ''}${p._new ? h`<span class="tag blue" style="font-size:11px">New here 👋</span>` : ''}</h2>
       ${p.voice ? h`<button class="voice-chip" data-voice="${p.voice}" aria-label="Play voice intro">${raw(I.play)} Voice intro</button>` : ''}
       <div class="meta"><span>${place(p)}${p._km != null ? ` · ${fmtKm(p._km)}` : ''}</span><span>${intentById(p.intent).icon} ${intentById(p.intent).short}</span></div>
       <div class="reasons">${r.map(x => h`<span class="tag ${x.k === 'roots' ? 'green' : x.k === 'intent' ? 'gold' : 'blue'}">${x.t}</span>`)}</div>
@@ -470,7 +514,7 @@ function cardHTML(p, top) {
 function drawDeck() {
   const deck = $('#deck'); if (!deck) return;
   if (!S.deck.length) {
-    deck.innerHTML = h`<div class="empty"><div class="pulse"><span style="font-size:40px">🇸🇱</span></div><h3>You've seen everyone for now</h3><p>New people join every day. Try another mode or widen your filters.</p>
+    deck.innerHTML = h`<div class="empty"><div class="pulse"><span style="font-size:40px">🇸🇱</span></div><h2>You've seen everyone for now</h2><p>New people join every day. Try another mode or widen your filters.</p>
       <div class="row" style="max-width:320px;margin:16px auto 0"><button class="btn btn-ghost btn-sm" id="e-world">🌍 Go worldwide</button><button class="btn btn-ghost btn-sm" id="e-prefs">Adjust filters</button></div></div>`;
     $('#e-world').onclick = () => { S.mode = 'worldwide'; localStorage.setItem('slc_mode', S.mode); renderDiscover(); };
     $('#e-prefs').onclick = prefsSheet;
@@ -556,18 +600,30 @@ function openSheet(html, onClose) {
   const bgEl = document.createElement('div'); bgEl.className = 'sheet-bg';
   const sh = document.createElement('div'); sh.className = 'sheet'; sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true');
   sh.innerHTML = '<div class="grab"></div>' + html;
+  const title = sh.querySelector('h1, h2, h3');   // screen readers announce the sheet by its heading
+  if (title) { title.id ||= 'sheet-title-' + Date.now(); sh.setAttribute('aria-labelledby', title.id); } else sh.setAttribute('aria-label', 'Details');
   document.body.append(bgEl, sh);
   requestAnimationFrame(() => { bgEl.classList.add('show'); sh.classList.add('show'); });
-  bgEl.onclick = closeSheet;
-  sheetEls = { bgEl, sh, onClose };
-  const esc_ = e => { if (e.key === 'Escape') closeSheet(); };
+  bgEl.onclick = () => { if (!sh.dataset.locked) closeSheet(); };
+  sheetEls = { bgEl, sh, onClose, back: document.activeElement };
+  // Keyboard users: focus moves into the sheet, Tab stays inside it, Escape closes it, focus returns afterwards.
+  const focusables = () => [...sh.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])')].filter(x => x.offsetParent !== null);
+  const esc_ = e => {
+    if (e.key === 'Escape' && !sh.dataset.locked) closeSheet();
+    if (e.key === 'Tab') { const f = focusables(); if (!f.length) return; const first = f[0], last = f[f.length - 1];
+      if (!sh.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); } }
+  };
   document.addEventListener('keydown', esc_); sheetEls.esc = esc_;
+  const focusIn = () => { if (sheetEls?.sh === sh && !sh.contains(document.activeElement)) (sh.querySelector('input:not([type=checkbox]), textarea') || focusables()[0])?.focus({ preventScroll: true }); };
+  setTimeout(focusIn, 60); setTimeout(focusIn, 350); // again after the slide-in animation, when everything is focusable
   return sh;
 }
 function closeSheet() {
   if (!sheetEls) return;
-  const { bgEl, sh, onClose, esc: e } = sheetEls; sheetEls = null;
+  const { bgEl, sh, onClose, esc: e, back } = sheetEls; sheetEls = null;
   document.removeEventListener('keydown', e);
+  if (back?.isConnected && sh.contains(document.activeElement)) back.focus({ preventScroll: true });
   bgEl.classList.remove('show'); sh.classList.remove('show');
   setTimeout(() => { bgEl.remove(); sh.remove(); }, 320);
   onClose?.();
@@ -757,7 +813,7 @@ function confetti() {
 async function renderLikes(tab = S.likesTab || 'liked') {
   S.likesTab = tab;
   const v = $('#view');
-  v.innerHTML = h`<header class="topbar"><h2>Likes</h2></header>
+  v.innerHTML = h`<header class="topbar"><h1>Likes</h1></header>
     <div class="seg" role="tablist"><button role="tab" data-t="liked" aria-selected="${tab === 'liked'}">Liked you</button><button role="tab" data-t="picks" aria-selected="${tab === 'picks'}">Top picks today</button></div>
     <div class="pad" id="lk"><div class="spinner"></div></div>`;
   $('.seg', v).onclick = e => { const b = e.target.closest('[data-t]'); if (b) renderLikes(b.dataset.t); };
@@ -766,8 +822,8 @@ async function renderLikes(tab = S.likesTab || 'liked') {
     if (tab === 'liked') {
       const likes = S.likes = await api.likesYou();
       const comp = completeness(me), locked = comp < 60;
-      if (!likes.length) { el.innerHTML = h`<div class="empty"><div class="big">💚</div><h3>No new likes yet</h3><p>Complete your profile and add more photos — complete profiles get up to 4× more likes.</p></div>`; return; }
-      el.innerHTML = h`${locked ? h`<div class="lock"><div style="font-size:32px">🔒</div><h3>${likes.length} ${likes.length === 1 ? 'person likes' : 'people like'} you!</h3><p style="color:var(--muted);margin:0">Reach 60% profile strength to see who. You're at ${comp}%.</p><div class="progress"><i style="width:${comp}%"></i></div><a class="btn btn-primary btn-sm" href="#/me">Complete my profile</a></div>` : h`<p style="color:var(--muted);margin:0 0 12px">Like them back for an instant match ✨</p>`}
+      if (!likes.length) { el.innerHTML = h`<div class="empty"><div class="big">💚</div><h2>No new likes yet</h2><p>Complete your profile and add more photos — complete profiles get up to 4× more likes.</p></div>`; return; }
+      el.innerHTML = h`${locked ? h`<div class="lock"><div style="font-size:32px">🔒</div><h2>${likes.length} ${likes.length === 1 ? 'person likes' : 'people like'} you!</h2><p style="color:var(--muted);margin:0">Reach 60% profile strength to see who. You're at ${comp}%.</p><div class="progress"><i style="width:${comp}%"></i></div><a class="btn btn-primary btn-sm" href="#/me">Complete my profile</a></div>` : h`<p style="color:var(--muted);margin:0 0 12px">Like them back for an instant match ✨</p>`}
         <div class="grid2">${rankDeck(me, likes, new Set()).map(p => h`<button class="tile ${locked ? 'blur' : ''}" data-id="${p.id}" style="${bg(photo(p))}" ${locked ? raw('disabled aria-hidden="true"') : ''}>
           ${p.superLiked ? h`<span class="tag gold sc">⭐ Oya!</span>` : h`<span class="tag green sc">${p._score}%</span>`}
           <div class="t">${p.comment && !locked ? h`<div class="cmt">💬 ${p.comment}</div>` : ''}<b>${p.name}, ${ageOf(p.dob)} ${vbadge(p)}</b><span>${place(p)}</span></div></button>`)}</div>`;
@@ -775,7 +831,7 @@ async function renderLikes(tab = S.likesTab || 'liked') {
     } else {
       const { candidates, likedMe } = await api.deck('worldwide');
       const picks = rankDeck(me, candidates, new Set(), Number(todayKey().replace(/-/g, ''))).sort((a, b) => b._score - a._score).slice(0, 6);
-      if (!picks.length) { el.innerHTML = h`<div class="empty"><div class="big">⭐</div><h3>No picks right now</h3><p>Check back tomorrow for fresh top picks.</p></div>`; return; }
+      if (!picks.length) { el.innerHTML = h`<div class="empty"><div class="big">⭐</div><h2>No picks right now</h2><p>Check back tomorrow for fresh top picks.</p></div>`; return; }
       el.innerHTML = h`<p style="color:var(--muted);margin:0 0 12px">Your highest Connect Scores today, refreshed every morning.</p>
         <div class="grid2">${picks.map(p => h`<button class="tile" data-id="${p.id}" style="${bg(photo(p))}"><span class="tag green sc">${p._score}%</span><div class="t"><b>${p.name}, ${ageOf(p.dob)} ${vbadge(p)}</b><span>${p._reasons[0]?.t || place(p)}</span></div></button>`)}</div>`;
       $$('.tile', el).forEach(t => t.onclick = () => openProfile(picks.find(x => x.id === t.dataset.id), { actions: true, fromLikes: true }));
@@ -786,12 +842,12 @@ async function renderLikes(tab = S.likesTab || 'liked') {
 // ───────────────────────── Chats ─────────────────────────
 async function renderChats() {
   const v = $('#view');
-  if (!$('#chats-root')) v.innerHTML = h`<header class="topbar"><h2>Chats</h2></header><div id="chats-root"><div class="spinner"></div></div>`;
+  if (!$('#chats-root')) v.innerHTML = h`<header class="topbar"><h1>Chats</h1></header><div id="chats-root"><div class="spinner"></div></div>`;
   const el = $('#chats-root');
   try {
     const ms = S.matches = await api.matches();
     const fresh = ms.filter(m => !m.last), convs = ms.filter(m => m.last);
-    if (!ms.length) { el.innerHTML = h`<div class="empty"><div class="big">💬</div><h3>No matches yet</h3><p>When you and someone like each other, you can chat here.</p><a class="btn btn-primary btn-sm" href="#/discover" style="margin-top:10px">Start discovering</a></div>`; return; }
+    if (!ms.length) { el.innerHTML = h`<div class="empty"><div class="big">💬</div><h2>No matches yet</h2><p>When you and someone like each other, you can chat here.</p><a class="btn btn-primary btn-sm" href="#/discover" style="margin-top:10px">Start discovering</a></div>`; return; }
     el.innerHTML = h`${fresh.length ? h`<div class="section-t">New connections <span style="text-transform:none;font-weight:600;color:var(--dim)">· say hi before they expire</span></div><div class="new-matches">${fresh.map(m => { const left = expiryLeft(m.expiresAt); return h`<a class="nm" href="#/chat/${encodeURIComponent(m.id)}" style="color:inherit;text-decoration:none"><div class="av ${left && left.urgent ? 'urgent' : ''}" style="${bg(photo(m.other))}"></div>${m.other.name}${left ? h`<span class="exp ${left.urgent ? 'urgent' : ''}">⏳ ${left.t}</span>` : ''}</a>`; })}</div>` : ''}
       ${convs.length ? h`<div class="section-t">Messages</div>${convs.map(m => {
         const mine = m.last.from === me.id;
@@ -940,28 +996,29 @@ async function renderMe() {
   const comp = completeness(me), tips = tipsFor(me);
   const vs = me.verified ? 'approved' : me.verificationStatus;
   const v = $('#view');
-  v.innerHTML = h`<header class="topbar"><h2>Profile</h2>${['admin', 'superadmin'].includes(session.role) ? h`<a class="btn btn-ghost btn-sm" href="${session.role === 'superadmin' ? 'superadmin.html' : 'admin.html'}">🛡️ Console</a>` : ''}</header>
+  v.innerHTML = h`<header class="topbar"><h1>Profile</h1>${['admin', 'superadmin'].includes(session.role) ? h`<a class="btn btn-ghost btn-sm" href="${session.role === 'superadmin' ? 'superadmin.html' : 'admin.html'}">🛡️ Console</a>` : ''}</header>
     <div class="me-head"><div class="me-av" style="${bg(photo(me))}"><div class="ring" style="--p:${comp}"></div><span class="ring-lbl">${comp}%</span></div>
       <div><h2 style="margin:0;font-family:var(--display)">${me.username || me.name}, ${ageOf(me.dob)} ${vbadge(me)}</h2>${me.name ? h`<div style="color:var(--muted);font-size:13.5px">🔒 ${me.name}${me.lastName ? ' ' + me.lastName : ''} · only you can see your name</div>` : ''}<div style="color:var(--muted)">${place(me)}</div>
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn btn-ghost btn-sm" id="me-prev">Preview</button><span class="streak">${raw(I.flame)} ${me.streak || 1} day streak</span></div></div></div>
-    ${tips.length ? h`<section class="card-sec"><h3>Profile strength <span class="tag green">${comp}%</span></h3><div class="progress"><i style="width:${comp}%"></i></div>${tips.slice(0, 3).map(([s, t]) => h`<button class="list-btn" data-edit="${s}">${t}<span>›</span></button>`)}</section>` : ''}
-    <section class="card-sec"><h3>Stand out</h3>
+    ${tips.length ? h`<section class="card-sec"><h2>Profile strength <span class="tag green">${comp}%</span></h2><div class="progress"><i style="width:${comp}%"></i></div>${tips.slice(0, 3).map(([s, t]) => h`<button class="list-btn" data-edit="${s}">${t}<span>›</span></button>`)}</section>` : ''}
+    <section class="card-sec"><h2>Stand out</h2>
       <button class="list-btn" data-edit="questions"><span>🎯 Compatibility questions<br><small>${me.answersCount || 0} of ${QUESTIONS.length} answered — more answers, better matches</small></span><span>›</span></button>
       <button class="list-btn" data-edit="voice"><span>🎤 Voice intro<br><small>${me.voice ? 'Recorded ✓ — tap to re-record or remove' : 'Let matches hear your voice (30s)'}</small></span><span>›</span></button></section>
-    <section class="card-sec"><h3>Edit profile</h3>
+    <section class="card-sec"><h2>Edit profile</h2>
       ${[['photos', 'Photos & bio', `${(me.photos || []).length}/6 photos`], ['prompts', 'Prompts', `${(me.prompts || []).filter(x => x.a).length} answered`], ['basics', 'Name, work & education', me.job || ''], ['roots', 'Salone roots & languages', me.homeDistrict || ''], ['location', 'Where I live', me.city || ''], ['intent', 'Looking for', intentById(me.intent).label], ['interests', 'Interests', `${(me.interests || []).length} selected`]]
         .map(([k, t, s]) => h`<button class="list-btn" data-edit="${k}"><span>${t}<br><small>${s}</small></span><span>›</span></button>`)}</section>
-    <section class="card-sec"><h3>Trust & safety</h3>
-      <button class="list-btn" id="me-verify"><span>${raw(I.shield.replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"'))} Photo verification<br><small>${vs === 'approved' ? '✓ You are verified' : vs === 'pending' ? 'In review — usually within 24h' : vs === 'rejected' ? 'Not approved — try again with a clear selfie' : 'Get the blue check and 2× more matches'}</small></span><span>›</span></button>
+    <section class="card-sec"><h2>Trust & safety</h2>
+      <button class="list-btn" id="me-verify"><span>${raw(I.shield.replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"'))} Photo verification<br><small>${vs === 'approved' ? '✓ You are verified' : vs === 'pending' ? 'In review — usually within 24h' : vs === 'rejected' ? 'Not approved — try again with a clear selfie' : 'Get the blue check so people know you\'re real'}</small></span><span>›</span></button>
       <button class="list-btn" id="me-safety"><span>Safety centre<br><small>Dating safely, spotting scams</small></span><span>›</span></button></section>
-    <section class="card-sec"><h3>Settings</h3>
+    <section class="card-sec"><h2>Settings</h2>
       <button class="list-btn" id="me-prefs"><span>Discovery filters<br><small>Ages ${fullPrefs(me).ageMin}–${fullPrefs(me).ageMax} · ${(fullPrefs(me).seeking || []).map(x => x === 'woman' ? 'Women' : 'Men').join(' & ') || 'Everyone'}</small></span><span>›</span></button>
       <label class="switch-row"><span>Pause my profile<small>Hide from Discover. Your matches stay.</small></span><span class="toggle"><input type="checkbox" id="me-pause" ${me.paused ? 'checked' : ''}><span></span></span></label>
       <button class="list-btn" id="me-pw"><span>Change password<br><small>${me.email || session?.email || ''}</small></span><span>›</span></button>
+      <button class="list-btn" id="me-data"><span>Download my data<br><small>A copy of everything we hold about you</small></span><span>›</span></button>
       <button class="list-btn" id="me-help"><span>Help & support<br><small>Contact the Sierra Leone Connect team</small></span><span>›</span></button>
       <button class="list-btn" id="me-out">Log out</button>
       <button class="list-btn" id="me-del" style="color:#FF8A8A">Delete account</button></section>
-    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · Sierra Leone Connect v${CONFIG.VERSION}</p>`;
+    <p class="fine" style="padding-bottom:20px"><a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="child-safety.html">Child safety</a> · <a href="cookies.html">Cookies</a> · <a href="licenses.html">Licences</a> · Sierra Leone Connect v${CONFIG.VERSION}</p>`;
   $('#me-prev').onclick = () => bindVoice(openSheet(profileBody({ ...me, name: me.username || me.name }, { mine: true })));
   $$('[data-edit]', v).forEach(b => b.onclick = () => b.dataset.edit === 'questions' ? questionsSheet() : b.dataset.edit === 'voice' ? voiceIntroSheet() : editSheet(b.dataset.edit));
   $('#me-prefs').onclick = prefsSheet;
@@ -971,6 +1028,7 @@ async function renderMe() {
   $('#me-out').onclick = () => logout();
   $('#me-pw').onclick = () => passwordSheet(false);
   $('#me-help').onclick = helpSheet;
+  $('#me-data').onclick = downloadMyData;
   $('#me-del').onclick = async () => {
     if (!await confirmSheet({ title: 'Delete your account?', text: 'Your profile, photos, matches and messages are erased permanently. This can\'t be undone.', ok: 'Delete forever', typeWord: 'DELETE' })) return;
     try { await api.deleteAccount(); toast('Your account has been deleted.'); logout(); } catch (e) { toast(e.message, 'error'); }
@@ -1004,7 +1062,7 @@ function prefsSheet() {
   const p = fullPrefs(me);
   p.seeking = [...(p.seeking || [])];
   const sh = openSheet(h`<div class="pad"><h2 style="font-family:var(--display);margin:4px 0 14px">Discovery filters</h2>
-    <div class="field"><span>Show me</span><div class="chips" id="pf-s">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${p.seeking.includes(g)}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>
+    <div class="field"><span>Show me</span><div class="chips" id="pf-s">${['woman', 'man'].map(g => h`<button type="button" class="chip" data-v="${g}" aria-pressed="${String(p.seeking.includes(g))}">${g === 'woman' ? 'Women' : 'Men'}</button>`)}</div></div>
     <div class="field"><span>Age range: <b id="pf-al">${p.ageMin}–${p.ageMax}</b></span><div class="range-row"><input type="range" min="18" max="70" value="${p.ageMin}" id="pf-a1" aria-label="Minimum age"><input type="range" min="18" max="80" value="${p.ageMax}" id="pf-a2" aria-label="Maximum age"></div></div>
     <div class="field"><span>"Near me" distance: <b id="pf-dl">${p.maxKm} km</b></span><input type="range" min="5" max="500" step="5" value="${p.maxKm}" id="pf-d"></div>
     <label class="switch-row"><span>Same faith only<small>Only show people who share your faith</small></span><span class="toggle"><input type="checkbox" id="pf-f" ${p.faithMatters ? 'checked' : ''}><span></span></span></label>
@@ -1047,13 +1105,13 @@ async function logout(msg) {
 function questionEditor(el, q, existing, onSave, onSkip) {
   const st = existing ? { m: existing.m, a: [...existing.a], i: existing.i } : { m: null, a: [], i: 2 };
   const draw = () => {
-    el.innerHTML = h`<div class="qcard"><div class="qcat">${Q_CATS[q.cat]}</div><h3>${q.text}</h3>
+    el.innerHTML = h`<div class="qcard"><div class="qcat">${Q_CATS[q.cat]}</div><h2>${q.text}</h2>
       <div class="qsec">Your answer</div>
-      <div class="qopts">${q.opts.map((o, k) => h`<button type="button" class="qopt" data-m="${k}" aria-pressed="${st.m === k}">${o}</button>`)}</div>
+      <div class="qopts">${q.opts.map((o, k) => h`<button type="button" class="qopt" data-m="${k}" aria-pressed="${String(st.m === k)}">${o}</button>`)}</div>
       ${st.m == null ? '' : h`<div class="qsec">Answers you'd accept from a match</div>
-      <div class="chips" id="qa">${q.opts.map((o, k) => h`<button type="button" class="chip" data-a="${k}" aria-pressed="${st.a.includes(k)}">${o}</button>`)}</div>
+      <div class="chips" id="qa">${q.opts.map((o, k) => h`<button type="button" class="chip" data-a="${k}" aria-pressed="${String(st.a.includes(k))}">${o}</button>`)}</div>
       <div class="qsec">How much does it matter?</div>
-      <div class="imp">${IMPORTANCE.map((x, k) => h`<button type="button" data-i="${k}" aria-pressed="${st.i === k}" class="${k === 4 ? 'deal' : ''}">${x.label}</button>`)}</div>
+      <div class="imp">${IMPORTANCE.map((x, k) => h`<button type="button" data-i="${k}" aria-pressed="${String(st.i === k)}" class="${k === 4 ? 'deal' : ''}">${x.label}</button>`)}</div>
       ${st.i === 4 ? h`<p class="tip">🚫 People whose answer you don't accept won't be shown to you.</p>` : ''}`}
       <div class="row" style="margin-top:14px">${onSkip ? h`<button type="button" class="btn btn-ghost" data-skip>Skip</button>` : ''}<button type="button" class="btn btn-primary" data-save ${st.m == null ? raw('disabled') : ''}>Save</button></div></div>`;
     $$('[data-m]', el).forEach(b => b.onclick = () => { const k = +b.dataset.m; if (st.m !== k) { st.m = k; if (!existing) st.a = [k]; else if (!st.a.includes(k)) st.a.push(k); } draw(); });

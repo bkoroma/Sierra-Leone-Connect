@@ -211,3 +211,6 @@ export const THIS_OR_THAT = [
   ['Movie night', 'Dancing'], ['Rice every day', 'Something new'], ['Plan everything', 'Go with the flow'], ['Cook together', 'Eat out'],
   ['Mountains', 'Sea'], ['Football', 'Music'], ['Save', 'Spend'], ['Krio', 'English']
 ];
+
+// Bump when the Terms or Privacy Policy change materially: members are asked to accept the new version in the app.
+export const TERMS_VERSION = '2026-11-11';

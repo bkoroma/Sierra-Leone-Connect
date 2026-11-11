@@ -137,7 +137,7 @@ export const demo = {
     load(); u = String(u || '').trim().toLowerCase();
     return !Object.values(db.profiles).some(p => (p.username || '').toLowerCase() === u);
   },
-  async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng }) {
+  async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng, termsVersion, sensitiveConsent }) {
     load();
     email = String(email).trim().toLowerCase();
     username = String(username || '').trim().toLowerCase();
@@ -148,12 +148,14 @@ export const demo = {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Enter a valid email.');
     if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
     if (Object.values(db.users).some(u => u.email === email)) throw new Error('An account with this email already exists.');
+    if ((db.bannedEmails || []).includes(await sha256(email))) throw new Error('This email address can\'t be used to create an account.');
     const id = uid(), salt = uid();
     db.users[id] = { id, email, salt, pw: await sha256(salt + password), role: 'user', status: 'active', createdAt: new Date().toISOString() };
     if (!['woman', 'man'].includes(gender)) throw new Error('Choose your gender.');
     db.profiles[id] = { id, gender, name: String(firstName || '').trim().slice(0, 30), lastName: String(lastName || '').trim().slice(0, 40), username, dob,
       country: country || '', city: city || '', lat: lat ?? null, lng: lng ?? null,
-      photos: [], interests: [], languages: [], prompts: [], createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), verificationStatus: 'none' };
+      photos: [], interests: [], languages: [], prompts: [], createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), verificationStatus: 'none',
+      termsVersion: termsVersion || null, termsAcceptedAt: termsVersion ? new Date().toISOString() : null, sensitiveConsentAt: sensitiveConsent ? new Date().toISOString() : null };
     audit(id, 'signup', id); save();
     localStorage.setItem(SESS, JSON.stringify({ uid: id, at: Date.now() }));
     return { id, email, role: 'user' };
@@ -163,7 +165,8 @@ export const demo = {
     email = String(email).trim().toLowerCase();
     const u = Object.values(db.users).find(x => x.email === email && x.pw);
     if (!u || (await sha256(u.salt + password)) !== u.pw) throw new Error('Email or password is incorrect.');
-    if (u.status === 'banned') throw new Error('This account has been banned.');
+    // Like the live backend, banned members can still sign in to delete their account (right to erasure);
+    // the app itself shows them the ban message and signs them out.
     localStorage.setItem(SESS, JSON.stringify({ uid: u.id, at: Date.now() }));
     return { id: u.id, email: u.email, role: u.role };
   },
@@ -230,16 +233,51 @@ export const demo = {
     p.verificationSelfie = selfieDataUrl; p.verificationStatus = 'pending'; p.verificationRequestedAt = new Date().toISOString(); save();
     return { status: 'pending' };
   },
-  async deleteAccount() {
+  async acceptTerms(version, sensitive = true) {
     const u = requireUser();
+    if (!version) throw new Error('Missing terms version.');
+    if (!sensitive) throw new Error('Sierra Leone Connect needs this consent to show you matches.');
+    const p = db.profiles[u.id], now = new Date().toISOString();
+    p.termsVersion = String(version).slice(0, 20); p.termsAcceptedAt = now; p.sensitiveConsentAt ||= now;
+    audit(u.id, 'accept_terms', u.id, { version: p.termsVersion }); save();
+    return { termsVersion: p.termsVersion };
+  },
+  async exportData() {
+    const u = requireUser(); const p = db.profiles[u.id];
+    const name = id => db.profiles[id]?.username || db.profiles[id]?.name || 'deleted member';
+    const myMatches = db.matches.filter(m => m.a === u.id || m.b === u.id);
+    const other = m => m.a === u.id ? m.b : m.a;
+    return {
+      exportedAt: new Date().toISOString(), service: 'Sierra Leone Connect',
+      account: { id: u.id, email: u.email, createdAt: u.createdAt, status: u.status, termsVersion: p.termsVersion || null, termsAcceptedAt: p.termsAcceptedAt || null, sensitiveConsentAt: p.sensitiveConsentAt || null },
+      profile: { firstName: p.name, lastName: p.lastName || null, username: p.username, dateOfBirth: p.dob, gender: p.gender, relationshipGoal: p.intent, city: p.city, country: p.country,
+        approxLatitude: p.lat ?? null, approxLongitude: p.lng ?? null, homeDistrict: p.homeDistrict, heritage: p.heritage, faith: p.faith, languages: p.languages, interests: p.interests,
+        prompts: p.prompts, bio: p.bio, job: p.job, education: p.education, heightCm: p.heightCm, photos: p.photos, voiceIntro: p.voice || null, discoveryPreferences: p.prefs,
+        paused: !!p.paused, verified: !!p.verified, verificationStatus: p.verificationStatus, lastActive: p.lastActive, streak: p.streak },
+      compatibilityAnswers: Object.entries(p.answers || {}).map(([q, a]) => ({ question: q, myAnswer: a.m, acceptable: a.a, importance: a.i })),
+      likesAndPassesISent: db.swipes.filter(x => x.from === u.id).map(x => ({ to: name(x.to), kind: x.kind, comment: x.comment || undefined, at: x.at })),
+      likesReceivedCount: db.swipes.filter(x => x.to === u.id && x.kind !== 'pass').length,
+      matches: myMatches.map(m => ({ with: name(other(m)), matchedAt: m.at, unmatched: !!m.unmatched })),
+      messagesISent: db.messages.filter(x => x.from === u.id).map(x => { const m = myMatches.find(y => y.id === x.matchId); return { to: m ? name(other(m)) : 'deleted member', kind: x.kind || 'text', text: x.body, at: x.at }; }),
+      reportsIMade: db.reports.filter(r => r.by === u.id).map(r => ({ about: name(r.target), reason: r.reason, details: r.details, status: r.status, at: r.at })),
+      peopleIBlocked: db.blocks.filter(b => b.by === u.id).map(b => ({ who: name(b.target), at: b.at })),
+      moderationOnMyAccount: db.audit.filter(a => a.target === u.id && ['warn', 'suspend', 'ban', 'reinstate', 'edit_member', 'verify_approve', 'verify_reject', 'resolve_report', 'accept_terms'].includes(a.action))
+        .map(a => { const { note, email, username, emailHash, ...details } = a.meta || {}; return { action: a.action, at: a.at, details }; }),
+      warningWaitingForYou: p.notice || null
+    };
+  },
+  async deleteAccount() {
+    load(); const s = session(); const u = s && db.users[s.uid];   // banned / suspended members may still delete
+    if (!u) throw new Error('Please log in again.');
     if (u.role === 'superadmin' && !Object.values(db.users).some(x => x.id !== u.id && x.role === 'superadmin' && x.status === 'active'))
       throw new Error('You are the only SuperAdmin. Make another member SuperAdmin before deleting this account.');
     db.swipes = db.swipes.filter(s => s.from !== u.id && s.to !== u.id);
     const mids = new Set(db.matches.filter(m => m.a === u.id || m.b === u.id).map(m => m.id));
     db.matches = db.matches.filter(m => !mids.has(m.id));
     db.messages = db.messages.filter(m => !mids.has(m.matchId));
+    if (u.status === 'banned') (db.bannedEmails ||= []).push(await sha256(u.email));
     delete db.profiles[u.id]; delete db.users[u.id];
-    audit(u.id, 'account_deleted', u.id); save();
+    audit(null, 'account_deleted', u.id); save();
     localStorage.removeItem(SESS);
   },
 
@@ -506,7 +544,7 @@ export const demo = {
     async decideVerification(id, approve) {
       const me = requireStaff(); const p = db.profiles[id]; if (!p) throw new Error('User not found');
       if (p.verificationStatus !== 'pending') throw new Error('This verification was already decided.');
-      p.verificationStatus = approve ? 'approved' : 'rejected'; p.verified = !!approve; p.completeness = completeness(p);
+      p.verificationStatus = approve ? 'approved' : 'rejected'; p.verified = !!approve; p.verificationSelfie = null; p.completeness = completeness(p);
       audit(me.id, approve ? 'verify_approve' : 'verify_reject', id); save();
     },
     async flagged() {
@@ -528,6 +566,11 @@ export const demo = {
       const clean = { ...db.settings };
       for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in s) clean[k] = typeof DEFAULT_SETTINGS[k] === 'number' ? Math.max(0, Math.min(1000, Number(s[k]) || 0)) : typeof DEFAULT_SETTINGS[k] === 'boolean' ? !!s[k] : String(s[k]).slice(0, 280);
       if (clean.minAge < 18) clean.minAge = 18;
+      for (const [k, max] of [['operatorName', 120], ['operatorAddress', 300], ['operatorCountry', 60]]) {
+        const v = String(s[k] ?? db.settings[k] ?? '').trim();
+        if (/[<>]/.test(v)) throw new Error('Business details can\'t contain < or >.');
+        if (v) clean[k] = v.slice(0, max); else delete clean[k];
+      }
       for (const k of ['supportEmail', 'safetyEmail']) {
         const v = String(s[k] ?? db.settings[k] ?? '').trim().toLowerCase();
         if (v && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v)) throw new Error(`${k === 'supportEmail' ? 'Support' : 'Safety'} e-mail doesn't look right.`);
@@ -554,7 +597,8 @@ export const demo = {
       const openR = db.reports.filter(r => r.status === 'open'), pend = profs.filter(p => p.verificationStatus === 'pending'), flags = db.messages.filter(m => m.flagged?.length && !m.cleared);
       const bytes = (() => { try { return new Blob([localStorage.getItem('slc_db_v2') || '']).size; } catch { return 0; } })();
       return {
-        schema: 15, now: new Date().toISOString(), dbSize: bytes, settings: { ...db.settings }, demo: true,
+        schema: 16, now: new Date().toISOString(),
+        consent: { missing: members.filter(p => !p.bot && (!p.termsAcceptedAt || !p.sensitiveConsentAt)).length, bannedEmailHashes: (db.bannedEmails || []).length }, dbSize: bytes, settings: { ...db.settings }, demo: true,
         tables: { profiles: profs.length, swipes: db.swipes.length, matches: db.matches.length, messages: db.messages.length, answers: members.reduce((n, p) => n + Object.keys(p.answers || {}).length, 0), reports: db.reports.length, blocks: db.blocks.length, audit_log: db.audit.length, client_errors: errs.length },
         storage: [{ bucket: 'photos (in browser)', files: members.reduce((n, p) => n + (p.photos || []).length, 0), bytes }],
         auth: { users: users.length, signups7d: users.filter(u => now - new Date(u.createdAt) < 7 * DAYMS).length, unconfirmed7d: 0, unconfirmedOld: 0, lastSignup: users.map(u => u.createdAt).sort().pop() || null, lastSignIn: null },
@@ -572,7 +616,9 @@ export const demo = {
       if (id === me.id) throw new Error('You cannot delete your own account from the console.');
       const t = db.users[id]; if (!t) throw new Error('User not found');
       if (t.role === 'superadmin') throw new Error('Remove the SuperAdmin role before deleting this account.');
-      audit(me.id, 'delete_user', id, { email: t.email, username: db.profiles[id]?.username || undefined });
+      const hash = await sha256(t.email);
+      if (t.status === 'banned') (db.bannedEmails ||= []).push(hash);
+      audit(me.id, 'delete_user', id, { wasBanned: t.status === 'banned', emailHash: hash.slice(0, 12) });
       const mids = new Set(db.matches.filter(m => m.a === id || m.b === id).map(m => m.id));
       db.swipes = db.swipes.filter(s => s.from !== id && s.to !== id);
       db.matches = db.matches.filter(m => !mids.has(m.id));

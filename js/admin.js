@@ -6,7 +6,7 @@ import { flagOf, intentById, DEFAULT_SETTINGS } from './constants.js';
 import { CONFIG } from './config.js';
 import { installErrorReporting } from './errors.js';
 
-const EXPECTED_SCHEMA = 15; // bump with every database migration the console depends on
+const EXPECTED_SCHEMA = 16; // bump with every database migration the console depends on
 
 const CONSOLE = document.body.dataset.console; // 'admin' | 'superadmin'
 const bg = u => `background-image:url("${safeImg(u).replace(/["'()\\\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))}")`;
@@ -56,15 +56,15 @@ const ago = t => { const x = timeAgo(t); return x === 'now' ? 'just now' : x + '
 const fmtDate = d => d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 
 function loginView(err = '') {
-  $('#root').innerHTML = h`<div class="login-wrap"><form class="auth-card" id="lf" novalidate>
-    <span class="logo" style="margin-bottom:14px"><span class="logo-mark"></span>${CONSOLE === 'superadmin' ? 'SuperAdmin' : 'Admin'} Console</span>
+  $('#root').innerHTML = h`<main class="login-wrap"><form class="auth-card" id="lf" novalidate>
+    <h1 class="logo" style="margin:0 0 14px;font-size:inherit"><span class="logo-mark"></span>${CONSOLE === 'superadmin' ? 'SuperAdmin' : 'Admin'} Console</h1>
     <p style="color:var(--muted);margin:6px 0 18px">Staff only. All actions are logged.</p>
     <label class="field"><span>Email</span><input class="input" name="email" type="email" autocomplete="username" required></label>
     <label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
     <div class="err" role="alert">${err}</div>
     <button class="btn btn-primary btn-block">Sign in</button>
     ${api.mode === 'demo' ? h`<div class="demo-note">Demo staff accounts (this device only):<br><span class="mono">${api.demoStaff.map(s => `${s.role}: ${s.email} / ${s.password}`).join('\n')}</span></div>` : ''}
-    <p class="fine"><a href="index.html" class="link">← Back to the app</a></p></form></div>`;
+    <p class="fine"><a href="index.html" class="link">← Back to the app</a></p></form></main>`;
   $('.demo-note .mono') && ($('.demo-note .mono').style.whiteSpace = 'pre-line');
   $('#lf').onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
@@ -325,6 +325,8 @@ function healthChecks(hd, ms) {
   add(hd.schema >= EXPECTED_SCHEMA ? 'ok' : 'bad', 'Database up to date', hd.schema >= EXPECTED_SCHEMA ? `Schema ${hd.schema} matches this app version (${CONFIG.VERSION}).` : `Database is on schema ${hd.schema}, the app expects ${EXPECTED_SCHEMA}. Run the newest migration in supabase/migrations.`);
   add(s.supportEmail ? 'ok' : 'warn', 'Support e-mail', s.supportEmail ? s.supportEmail : `Not set — the app shows the placeholder ${CONFIG.SUPPORT_EMAIL}. Add a real inbox in App settings.`, { tab: 'settings', label: 'Open settings' });
   add(s.safetyEmail || s.supportEmail ? 'ok' : 'warn', 'Child-safety contact', s.safetyEmail || s.supportEmail || 'Not set — required by Google Play for dating apps.', { tab: 'settings', label: 'Open settings' });
+  add(s.operatorName && s.operatorAddress ? 'ok' : 'warn', 'Business details on legal pages', s.operatorName && s.operatorAddress ? `${s.operatorName} · ${s.operatorAddress}` : 'Add the legal name and address of whoever runs the app. Privacy laws and Google Play require it.', { tab: 'settings', label: 'Open settings' });
+  if (hd.consent) add(hd.consent.missing ? 'warn' : 'ok', 'Member consent records', hd.consent.missing ? `${hd.consent.missing} member(s) haven't accepted the current terms yet — they're asked the next time they open the app.` : 'Every member has accepted the current terms and the sensitive-data consent.');
   add(s.requireAdminMfa ? 'ok' : 'bad', 'Staff 2FA required', s.requireAdminMfa ? 'Consoles and staff data need an authenticator code.' : 'Turned off — anyone with a staff password can read member data.', { tab: 'settings', label: 'Open settings' });
   if (!hd.demo) add(st.without2fa?.length ? 'warn' : 'ok', 'Staff 2FA set up', st.without2fa?.length ? `Not enrolled yet: ${st.without2fa.join(', ')}. They're asked the next time they open a console.` : 'Every staff account has an authenticator.');
   add(st.superadmins >= 2 ? 'ok' : 'warn', 'Backup SuperAdmin', st.superadmins >= 2 ? `${st.superadmins} SuperAdmins.` : 'Only one SuperAdmin. If that account is lost nobody can manage the app — promote a trusted second person.', { tab: 'staff', label: 'Staff & roles' });
@@ -407,10 +409,11 @@ ${x.ua || ''}</pre></details></td><td><b>${x.count}</b></td></tr>`)}</tbody></ta
   },
 
   async reports(m, status = 'open') {
-    const rs = await api.admin.reports(status);
+    // Possible minors are a child-safety priority: always shown first.
+    const rs = (await api.admin.reports(status)).sort((a, b) => (b.reason === 'Underage') - (a.reason === 'Underage'));
     m.innerHTML = h`<h1>Reports</h1><p class="sub">Confidential member reports. Resolve every report within 24 hours. Click a member to see their full history.</p>
-      <div class="chips" style="margin-bottom:14px" id="rf">${['open', 'actioned', 'dismissed', 'all'].map(x => h`<button class="chip" data-s="${x}" aria-pressed="${x === status}">${x}</button>`)}</div>
-      ${rs.length ? rs.map(r => h`<div class="item"><div class="top">${userCell(r.subject, r.subject?.email, r.subject?.id)}<span><span class="tag gold">${r.reason}</span> <span class="status ${r.subject?.status}">${r.subject?.status}</span></span></div>
+      <div class="chips" style="margin-bottom:14px" id="rf">${['open', 'actioned', 'dismissed', 'all'].map(x => h`<button class="chip" data-s="${x}" aria-pressed="${String(x === status)}">${x}</button>`)}</div>
+      ${rs.length ? rs.map(r => h`<div class="item"><div class="top">${userCell(r.subject, r.subject?.email, r.subject?.id)}<span>${r.reason === 'Underage' && r.status === 'open' ? h`<span class="tag priority">Child safety — priority</span> ` : ''}<span class="tag gold">${r.reason}</span> <span class="status ${r.subject?.status}">${r.subject?.status}</span></span></div>
         ${r.details ? h`<q>${r.details}</q>` : ''}
         ${r.message ? h`<div class="quoted"><small>Reported message</small><q>${r.message}</q></div>` : ''}
         <small style="color:var(--muted)">Reported by ${r.reporter?.name ? '@' + r.reporter.name : r.reporter?.email || 'a deleted member'} · ${ago(r.at)}${r.resolution ? ` · handled: ${r.resolution}` : ''}</small>
@@ -462,12 +465,12 @@ ${x.ua || ''}</pre></details></td><td><b>${x.count}</b></td></tr>`)}</tbody></ta
     const FILTERS = [['all', 'All'], ['active', 'Active'], ['reported', 'Open reports'], ['suspended', 'Suspended'], ['banned', 'Banned'], ['pending', 'Awaiting verification'], ['verified', 'Verified'], ['unverified', 'Not verified'], ['unconfirmed', 'Email not confirmed'], ['onboarding', 'Still onboarding'], ['staff', 'Staff']];
     m.innerHTML = h`<h1>Members</h1><p class="sub">Search by name, username, email, city or country. Click a member for their profile, history and moderation tools.</p>
       <div class="search"><input class="input" id="q" placeholder="Search members…" value="${memState.q}" aria-label="Search members">${superHere() ? h`<button class="btn btn-ghost" id="csv">Export CSV</button>` : ''}</div>
-      <div class="chips" id="mf" style="margin-bottom:14px">${FILTERS.map(([k, l]) => h`<button class="chip" data-f="${k}" aria-pressed="${k === memState.filter}">${l}</button>`)}</div>
+      <div class="chips" id="mf" style="margin-bottom:14px">${FILTERS.map(([k, l]) => h`<button class="chip" data-f="${k}" aria-pressed="${String(k === memState.filter)}">${l}</button>`)}</div>
       <div id="ul"><div class="spinner"></div></div>`;
     let rows = [];
     const draw = async () => {
       rows = await api.admin.members(memState.q, memState.filter);
-      $('#ul').innerHTML = rows.length ? h`<p class="sub" style="margin:0 0 8px">${rows.length}${rows.length >= 500 ? '+' : ''} member${rows.length === 1 ? '' : 's'}</p><div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Member</th><th>Location</th><th>Joined</th><th>Last active</th><th>Status</th><th></th></tr></thead><tbody>
+      $('#ul').innerHTML = rows.length ? h`<p class="sub" style="margin:0 0 8px">${rows.length}${rows.length >= 500 ? '+' : ''} member${rows.length === 1 ? '' : 's'}</p><div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Member</th><th>Location</th><th>Joined</th><th>Last active</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>
         ${rows.map(u => h`<tr><td>${userCell(u.profile, u.email, u.id)}</td><td>${u.profile?.city || u.profile?.country ? h`${flagOf(u.profile.country)} ${u.profile.city || u.profile.country}` : '—'}</td><td>${ago(u.createdAt)}</td><td>${u.lastActive ? ago(u.lastActive) : '—'}</td>
           <td>${statusPill(u)}${u.role !== 'user' ? h` <span class="status ${u.role}">${u.role}</span>` : ''}${u.openReports ? h` <span class="tag gold">${u.openReports} report${u.openReports > 1 ? 's' : ''}</span>` : ''}${u.profile?.verificationStatus === 'pending' ? h` <span class="tag blue">verify</span>` : ''}${u.emailConfirmed === false ? h` <span class="tag">email unconfirmed</span>` : ''}</td>
           <td><button class="btn btn-ghost btn-sm" data-member="${u.id}">Open</button></td></tr>`)}</tbody></table></div>`
@@ -528,6 +531,10 @@ ${x.ua || ''}</pre></details></td><td><b>${x.count}</b></td></tr>`)}</tbody></ta
       <div class="panel"><h2>Contact details</h2><p class="sub" style="margin-top:-6px">Shown in Help & support and on the policy pages. Google Play requires a support e-mail you actually read.</p><div class="set-grid">
         <label class="field"><span>Support e-mail</span><input class="input" type="email" data-k="supportEmail" value="${s.supportEmail || ''}" placeholder="${CONFIG.SUPPORT_EMAIL}" autocomplete="off"></label>
         <label class="field"><span>Safety / child-safety e-mail</span><input class="input" type="email" data-k="safetyEmail" value="${s.safetyEmail || ''}" placeholder="${CONFIG.SAFETY_EMAIL || CONFIG.SUPPORT_EMAIL}" autocomplete="off"></label></div></div>
+      <div class="panel"><h2>Business details</h2><p class="sub" style="margin-top:-6px">Who legally runs the app. Shown on the privacy policy and terms. Use your registered business name and address, or your own name if you run it personally.</p><div class="set-grid">
+        <label class="field"><span>Legal name (person or company)</span><input class="input" data-k="operatorName" maxlength="120" value="${s.operatorName || ''}" placeholder="e.g. Koroma Digital LLC" autocomplete="organization"></label>
+        <label class="field"><span>Country whose law applies</span><input class="input" data-k="operatorCountry" maxlength="60" value="${s.operatorCountry || ''}" placeholder="e.g. United States (Maryland)" autocomplete="off"></label>
+        <label class="field" style="grid-column:1/-1"><span>Business address</span><input class="input" data-k="operatorAddress" maxlength="300" value="${s.operatorAddress || ''}" placeholder="Street, city, state / region, postcode, country" autocomplete="street-address"></label></div></div>
       <div class="panel"><h2>Announcement banner</h2><label class="field"><span>Shown at the top of Discover (leave empty to hide)</span><input class="input" data-k="announcement" maxlength="280" value="${s.announcement}"></label></div>
       <button class="btn btn-primary" id="save">Save settings</button>
       ${api.mode === 'demo' ? h`<button class="btn btn-danger" id="reset" style="margin-left:10px">Reset demo data</button>` : ''}`;
@@ -554,7 +561,7 @@ ${x.ua || ''}</pre></details></td><td><b>${x.count}</b></td></tr>`)}</tbody></ta
       const a = $('#af').value, q = $('#aq').value.trim().toLowerCase();
       rows = all.filter(r => (!a || r.action === a) && (!q || [r.actorEmail, r.targetEmail, JSON.stringify(r.meta || {})].some(v => String(v || '').toLowerCase().includes(q))));
       $('#al').innerHTML = rows.length ? h`<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Member / target</th><th>Details</th></tr></thead><tbody>
-        ${rows.map(r => h`<tr><td style="white-space:nowrap">${fmtDate(r.at)}</td><td>${r.actorEmail}</td><td><span class="tag">${ACTION_LABEL[r.action] || r.action}</span></td><td class="mono">${r.targetEmail || ''}</td><td class="mono">${JSON.stringify(r.meta || {}).slice(0, 160)}</td></tr>`)}</tbody></table></div>`
+        ${rows.map(r => h`<tr><td style="white-space:nowrap">${fmtDate(r.at)}</td><td>${r.actorEmail || (r.action === 'account_deleted' ? 'the member' : '—')}</td><td><span class="tag">${ACTION_LABEL[r.action] || r.action}</span></td><td class="mono">${r.targetEmail || ''}</td><td class="mono">${JSON.stringify(r.meta || {}).slice(0, 160)}</td></tr>`)}</tbody></table></div>`
         : h`<div class="panel" style="text-align:center;color:var(--muted)">No entries match.</div>`;
     };
     $('#af').onchange = draw; $('#aq').oninput = debounce(draw, 200);

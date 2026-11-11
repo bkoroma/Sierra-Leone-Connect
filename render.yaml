@@ -27,7 +27,7 @@ services:
         value: same-origin
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' data: blob: https://*.supabase.co wss://*.supabase.co; media-src 'self' data: blob: https://*.supabase.co; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' data: blob: https://*.supabase.co wss://*.supabase.co; media-src 'self' data: blob: https://*.supabase.co; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
       - path: /*.html
         name: Cache-Control
         value: no-cache
@@ -45,6 +45,9 @@ services:
       - path: /css/*
         name: Cache-Control
         value: no-cache
+      - path: /fonts/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
       - path: /icons/*
         name: Cache-Control
         value: public, max-age=2592000

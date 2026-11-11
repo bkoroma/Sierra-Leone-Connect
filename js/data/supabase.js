@@ -57,16 +57,18 @@ export async function createSupabaseApi(cfg) {
   let recovery = false, onRecovery = null;
   sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') { recovery = true; onRecovery?.(); } });
 
+  const selfiePaths = new Map();
   const api = {
     mode: 'live',
     async init() {},
 
     // Auth
     usernameAvailable: u => rpc('username_available', { p_username: u }),
-    async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng }) {
+    async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng, termsVersion, sensitiveConsent }) {
       const { data, error } = await sb.auth.signUp({ email: String(email).trim(), password, options: { emailRedirectTo: webHome(),
         // Read by the handle_new_user trigger, which validates and saves them to the profile.
-        data: { first_name: firstName, last_name: lastName, username, dob, gender, country, city: city || null, lat: lat ?? null, lng: lng ?? null } } });
+        data: { first_name: firstName, last_name: lastName, username, dob, gender, country, city: city || null, lat: lat ?? null, lng: lng ?? null,
+          terms_version: termsVersion || null, sensitive_consent: !!sensitiveConsent } } });
       authErr(error);
       return data.user;
     },
@@ -96,6 +98,8 @@ export async function createSupabaseApi(cfg) {
 
     // Profile
     me: () => rpc('get_me'),
+    acceptTerms: (version, sensitive = true) => rpc('accept_terms', { p_version: version, p_sensitive: sensitive }),
+    exportData: () => rpc('export_my_data'),
     ackNotice: () => rpc('ack_notice'),
     saveProfile: p => rpc('save_profile', { p }),
     async uploadPhoto(dataUrl) {
@@ -205,11 +209,17 @@ export async function createSupabaseApi(cfg) {
         const rows = await rpc('admin_verifications');
         return Promise.all(rows.map(async r => {
           const path = (r.verificationSelfie || '').replace(/^verifications\//, '');
+          selfiePaths.set(r.id, path);
           const { data } = path ? await sb.storage.from('verifications').createSignedUrl(path, 600) : { data: null };
           return { ...r, verificationSelfie: data?.signedUrl || '' };
         }));
       },
-      decideVerification: (id, ok) => rpc('admin_decide_verification', { p_id: id, p_approve: ok }),
+      async decideVerification(id, ok) {
+        await rpc('admin_decide_verification', { p_id: id, p_approve: ok });
+        // The selfie is only needed for the decision, so it's deleted straight away (data minimisation).
+        const path = selfiePaths.get(id);
+        if (path) { try { await sb.storage.from('verifications').remove([path]); } catch { /* reference already cleared */ } selfiePaths.delete(id); }
+      },
       flagged: () => rpc('admin_flagged'),
       clearFlag: id => rpc('admin_clear_flag', { p_id: id }),
       setRole: (id, role) => rpc('super_set_role', { p_id: id, p_role: role }),
