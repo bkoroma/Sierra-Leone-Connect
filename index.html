@@ -17,8 +17,8 @@
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="preload" href="fonts/dm-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="css/fonts.css?v=1.6.0">
-<link rel="stylesheet" href="css/app.css?v=1.6.0">
+<link rel="stylesheet" href="css/fonts.css?v=1.7.0">
+<link rel="stylesheet" href="css/app.css?v=1.7.0">
 </head>
 <body>
 <noscript><p style="padding:20px">Sierra Leone Connect needs JavaScript turned on.</p></noscript>
@@ -28,7 +28,7 @@
   <div class="flagbar"></div>
   <nav class="land-nav">
     <span class="logo"><span class="logo-mark" aria-hidden="true"></span> Sierra Leone Connect</span>
-    <button class="btn btn-ghost btn-sm" data-goto="login">Log in</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-goto="login">Log in</button>
   </nav>
   <main class="land-wrap">
     <section class="hero">
@@ -36,35 +36,35 @@
       <h1>Find your person — <em>from Freetown to everywhere.</em></h1>
       <p class="lead">Meet Sierra Leoneans who share your roots, your faith and your plans for the future — whether you're in Bo, Baltimore, London or Toronto.</p>
       <div class="row" style="max-width:420px">
-        <button class="btn btn-primary" data-goto="signup">Create free account</button>
-        <button class="btn btn-ghost" data-goto="login">I have an account</button>
+        <button type="button" class="btn btn-primary" data-goto="signup">Create free account</button>
+        <button type="button" class="btn btn-ghost" data-goto="login">I have an account</button>
       </div>
       <div class="hero-stats">
         <div><b>Free</b><span>no fees or subscriptions</span></div>
         <div><b>18+</b><span>adults only</span></div>
         <div><b>16</b><span>home districts to match on</span></div>
       </div>
-      <div class="globe-row" aria-label="Made for Salone people in places like">
+      <div class="globe-row" role="group" aria-label="Made for Salone people in places like">
         <span class="tag">🇸🇱 Freetown</span><span class="tag">🇬🇧 London</span><span class="tag">🇺🇸 DMV</span><span class="tag">🇺🇸 Atlanta</span><span class="tag">🇨🇦 Toronto</span><span class="tag">🇺🇸 Minneapolis</span><span class="tag">🇬🇭 Accra</span><span class="tag">🇩🇪 Berlin</span>
       </div>
     </section>
 
     <section class="auth-card" id="auth" aria-label="Log in or sign up">
       <div class="tabs" role="tablist">
-        <button role="tab" id="tab-login" aria-selected="true">Log in</button>
-        <button role="tab" id="tab-signup" aria-selected="false">Sign up</button>
+        <button type="button" role="tab" id="tab-login" aria-controls="form-login" aria-selected="true">Log in</button>
+        <button type="button" role="tab" id="tab-signup" aria-controls="form-signup" aria-selected="false">Sign up</button>
       </div>
-      <form id="form-login" novalidate>
+      <form id="form-login" aria-labelledby="tab-login" novalidate>
         <label class="field"><span>Email</span><input class="input" type="email" name="email" autocomplete="email" required></label>
         <label class="field"><span>Password</span><input class="input" type="password" name="password" autocomplete="current-password" required></label>
         <div class="err" id="login-err" role="alert"></div>
         <button class="btn btn-primary btn-block" type="submit">Log in</button>
         <p class="fine"><button type="button" class="link" id="forgot">Forgot password?</button></p>
       </form>
-      <form id="form-signup" class="hidden" novalidate>
+      <form id="form-signup" class="hidden" aria-labelledby="tab-signup" novalidate>
         <div class="row">
-          <label class="field"><span>First name</span><input class="input" name="firstName" autocomplete="given-name" maxlength="30" required></label>
-          <label class="field"><span>Last name</span><input class="input" name="lastName" autocomplete="family-name" maxlength="40" required></label>
+          <label class="field"><span>First name</span><input class="input" type="text" name="firstName" autocomplete="given-name" maxlength="30" required></label>
+          <label class="field"><span>Last name</span><input class="input" type="text" name="lastName" autocomplete="family-name" maxlength="40" required></label>
         </div>
         <div class="field" role="radiogroup" aria-labelledby="su-gender-l"><span id="su-gender-l">Gender</span>
           <div class="seg-pick">
@@ -72,15 +72,15 @@
             <label><input type="radio" name="gender" value="man"><span>👨🏾 Man</span></label>
           </div></div>
         <label class="field"><span>Username</span>
-          <div class="at-input"><span aria-hidden="true">@</span><input class="input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="aminata_k" required></div>
+          <span class="at-input"><span aria-hidden="true">@</span><input class="input" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="aminata_k" required></span>
           <small class="hint" id="su-user-hint">3–20 letters, numbers, dots or underscores.</small></label>
         <label class="field"><span>Email</span><input class="input" type="email" name="email" autocomplete="email" required></label>
         <label class="field"><span>Password (8+ characters)</span><input class="input" type="password" name="password" autocomplete="new-password" minlength="8" required></label>
         <label class="field"><span>Confirm password</span><input class="input" type="password" name="password2" autocomplete="new-password" minlength="8" required>
           <small class="hint" id="su-pw-hint"></small></label>
         <label class="field"><span>Date of birth</span><input class="input" type="date" name="dob" required></label>
-        <label class="field"><span>Country</span><select class="input" name="country" id="su-country" required><option value="">Choose your country…</option></select>
-          <small class="hint" id="su-geo-hint"><button type="button" class="link" id="su-geo">📍 Detect my location</button></small></label>
+        <div class="field"><label class="field" style="margin:0"><span>Country</span><select class="input" name="country" id="su-country" required><option value="">Choose your country…</option></select></label>
+          <small class="hint" id="su-geo-hint"><button type="button" class="link" id="su-geo">📍 Detect my location</button></small></div>
         <p class="fine" style="text-align:left;margin:-6px 0 12px">🔒 Other members only see your <b>username</b>. Your first and last name stay private.</p>
         <label class="switch-row" style="border:0;padding:4px 0 8px"><span style="font-size:13.5px;color:var(--muted)">I'm 18+ and agree to the <a href="terms.html" target="_blank" rel="noopener" class="link">Terms</a> &amp; <a href="privacy.html" target="_blank" rel="noopener" class="link">Privacy Policy</a>. I'll treat everyone with respect.</span><span class="toggle"><input type="checkbox" name="agree" required aria-label="I'm 18 or older and agree to the Terms and Privacy Policy"><span></span></span></label>
         <label class="switch-row" style="border:0;padding:4px 0 12px"><span style="font-size:13.5px;color:var(--muted)">I agree that Sierra Leone Connect can use details I choose to share — like my faith, heritage and who I'm interested in — to find my matches. <a href="privacy.html#sensitive" target="_blank" rel="noopener" class="link">Why?</a></span><span class="toggle"><input type="checkbox" name="sensitive" required aria-label="I agree to the use of sensitive details I share for matching"><span></span></span></label>
@@ -108,6 +108,6 @@
 <!-- Onboarding and main app mount here -->
 <div id="root"></div>
 
-<script type="module" src="js/app.js?v=1.6.0"></script>
+<script type="module" src="js/app.js?v=1.7.0"></script>
 </body>
 </html>

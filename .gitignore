@@ -3,3 +3,7 @@ node_modules/
 .DS_Store
 *.jks
 keystore.properties
+
+tests/node_modules/
+tests/.out/
+tests/package-lock.json

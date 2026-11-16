@@ -106,3 +106,24 @@ Every action is checked again on the server: role, active status, and 2FA (aal2)
   - The offline service worker no longer mixes old and new files after a deploy.
   - JS/CSS are always revalidated.
 
+## Code audit (v1.7)
+- **Checks run:**
+  - syntax and static analysis (ESLint) on all JavaScript;
+  - HTML validation;
+  - every file reference and import;
+  - all 47 client calls matched against the live database functions;
+  - live database compared with `supabase/schema.sql` (no drift).
+- **Fixed:**
+  - Account deletion left banned members' uploads behind, and could erase a SuperAdmin's files before refusing the deletion. `my_media` now works for banned members and refuses first when the account can't be deleted.
+  - An unmatched person could force the match back by liking again, and unmatched or blocked conversations were still readable. Unmatch now turns the like into a pass; `get_messages` and `_is_member` exclude unmatched, blocked and banned.
+  - Sign-up with an already registered e-mail said "check your email" although nothing was sent.
+  - A lost session (expired sign-in, ban, suspension, maintenance) left the app open and failing on every tap. It now exits cleanly.
+  - Start-up failure showed a raw error. It now shows an offline / retry screen.
+  - `localStorage` access could crash start-up when storage is blocked.
+- **Hardened:**
+  - Profile photos and voice intros must be the member's own files in this project's storage (`_own_media`, pinned to the token issuer).
+  - Usernames that look like staff or the brand are reserved (`_reserved_username`, mirrored in `js/geo.js`).
+  - One open report per reporter and member.
+  - Storage rules accept both owner columns.
+- **Tests now live in `tests/`** (17 suites, 341 checks): `cd tests && npm install && npm test`. See `tests/README.md`.
+

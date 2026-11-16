@@ -15,10 +15,22 @@ export async function createSupabaseApi(cfg) {
   const { createClient } = await import(SDK);
   const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 
+  // The app registers a handler so a lost session (expired sign-in, ban, suspension, maintenance) is handled once,
+  // in one place, instead of every screen showing its own error.
+  let onLost = null, lostFired = false;
+  const OFFLINE = /failed to fetch|networkerror|network request failed|load failed|fetch failed/i;
   const rpc = async (fn, args) => {
-    const { data, error } = await sb.rpc(fn, args);
-    if (error) throw new Error(error.message?.replace(/^.*?ERROR:\s*/, '') || 'Request failed');
-    return data;
+    let res;
+    try { res = await sb.rpc(fn, args); } catch (e) { res = { error: e }; }
+    const { data, error } = res;
+    if (!error) return data;
+    const raw = String(error.message || '');
+    if (OFFLINE.test(raw)) throw Object.assign(new Error('No internet connection. Check your connection and try again.'), { code: 'offline' });
+    const msg = raw.replace(/^.*?ERROR:\s*/, '') || 'Request failed';
+    const kind = error.code === 'PGRST301' || /jwt expired|invalid jwt|please log in again/i.test(raw) ? 'auth'
+      : /has been banned|is suspended/i.test(raw) ? 'status' : /down for maintenance/i.test(raw) ? 'maintenance' : null;
+    if (kind && onLost && !lostFired) { lostFired = true; setTimeout(() => onLost(kind, msg), 0); }
+    throw Object.assign(new Error(kind === 'auth' ? 'Your session has ended. Please log in again.' : msg), { code: kind || error.code });
   };
   // Friendlier wording for the auth errors members actually hit. `code` lets the app offer the right next step.
   const AUTH_MSG = [
@@ -31,6 +43,7 @@ export async function createSupabaseApi(cfg) {
   ];
   const authErr = e => {
     if (!e) return;
+    if (OFFLINE.test(e.message || '')) throw Object.assign(new Error('No internet connection. Check your connection and try again.'), { code: 'offline' });
     const hit = AUTH_MSG.find(([re]) => re.test(e.message || ''));
     throw Object.assign(new Error(hit ? hit[2] : e.message), { code: hit ? hit[1] : e.code });
   };
@@ -70,9 +83,15 @@ export async function createSupabaseApi(cfg) {
         data: { first_name: firstName, last_name: lastName, username, dob, gender, country, city: city || null, lat: lat ?? null, lng: lng ?? null,
           terms_version: termsVersion || null, sensitive_consent: !!sensitiveConsent } } });
       authErr(error);
+      // When the address is already registered, Supabase answers with a placeholder user (no identities) and sends
+      // nothing, so the person would wait for an e-mail that never comes.
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        throw Object.assign(new Error('An account with this email already exists. Try logging in or resetting your password.'), { code: 'user_exists' });
+      }
       return data.user;
     },
-    async signIn({ email, password }) { const { data, error } = await sb.auth.signInWithPassword({ email: String(email).trim(), password }); authErr(error); return data.user; },
+    onSessionLost(cb) { onLost = cb; },
+    async signIn({ email, password }) { const { data, error } = await sb.auth.signInWithPassword({ email: String(email).trim(), password }); authErr(error); lostFired = false; return data.user; },
     async signOut() { await sb.auth.signOut(); },
     onRecovery(cb) { onRecovery = cb; if (recovery) cb(); },
     async updatePassword(password) {
@@ -128,11 +147,16 @@ export async function createSupabaseApi(cfg) {
     async requestVerification(dataUrl) { const path = await upload('verifications', dataUrl); return rpc('request_verification', { p_selfie: 'verifications/' + path }); },
     async deleteAccount() {
       // Erase uploaded photos, voice notes and selfies first (Storage API), then the account itself.
-      const files = await rpc('my_media').catch(() => []);
+      // my_media also checks the account may be deleted, so nothing is erased for an account that would stay.
+      // If the list can't be read we stop: deleting the account first would leave its files behind for good.
+      const files = await rpc('my_media');
       const byBucket = {};
       for (const f of files || []) (byBucket[f.bucket] ||= []).push(f.path);
       for (const [bucket, paths] of Object.entries(byBucket)) {
-        for (let i = 0; i < paths.length; i += 100) await sb.storage.from(bucket).remove(paths.slice(i, i + 100));
+        for (let i = 0; i < paths.length; i += 100) {
+          const { error } = await sb.storage.from(bucket).remove(paths.slice(i, i + 100));
+          if (error) throw new Error('We couldn\'t erase your uploads. Please try again in a moment.');
+        }
       }
       await rpc('delete_account'); await sb.auth.signOut();
     },

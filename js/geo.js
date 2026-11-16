@@ -29,4 +29,8 @@ export function detectLocation({ timeout = 12000 } = {}) {
 }
 
 export const USERNAME_RE = /^(?![._])(?!.*[._]$)(?!.*[._]{2})[a-z0-9._]{3,20}$/;
+// Names that could be mistaken for staff or the brand. Keep in sync with public._reserved_username() in the schema.
+const RESERVED_PREFIX = /^(slconnect|sierraleoneconnect|salonecon+ect|admin|superadmin|support|moderator|official|helpdesk|customerservice|customercare)/;
+const RESERVED_EXACT = new Set(['mod', 'mods', 'staff', 'team', 'help', 'safety', 'security', 'system', 'root', 'owner', 'null', 'undefined', 'member', 'deleted', 'deletedmember', 'everyone', 'anonymous', 'slc']);
+export const isReservedUsername = u => { const x = String(u || '').toLowerCase().replace(/[._]/g, ''); return RESERVED_PREFIX.test(x) || RESERVED_EXACT.has(x); };
 export const normalizeUsername = u => String(u || '').trim().replace(/^@+/, '').toLowerCase();

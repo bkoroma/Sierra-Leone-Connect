@@ -98,3 +98,9 @@ export function scamCheck(text) {
   for (const [re, label] of SCAM_PATTERNS) if (re.test(text)) hits.push(label);
   return hits;
 }
+
+// Browser storage that never throws (private windows and blocked site data make localStorage raise).
+export const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* preference just isn't remembered */ } }
+};

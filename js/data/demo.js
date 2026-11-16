@@ -1,7 +1,8 @@
 // Demo backend: runs fully in the browser (localStorage) so the app works with zero setup.
 // Same interface as supabase.js — flip config.js to go live.
 import { seedProfiles, avatarSVG } from './seed.js';
-import { DEFAULT_SETTINGS, BOT_REPLIES, REPORT_REASONS, qById, THIS_OR_THAT, PROMPTS } from '../constants.js';
+import { DEFAULT_SETTINGS, BOT_REPLIES, REPORT_REASONS, qById, THIS_OR_THAT } from '../constants.js';
+import { USERNAME_RE, isReservedUsername } from '../geo.js';
 import { uid, sha256, todayKey, scamCheck, ageOf } from '../util.js';
 import { completeness, eligible, qMatch, PASS_RESURFACE_DAYS } from '../match.js';
 
@@ -91,7 +92,8 @@ const blockedBetween = (a, b) => db.blocks.some(x => (x.by === a && x.target ===
 const active = id => db.users[id]?.status === 'active';
 const publicProfile = (p, meId = session()?.uid) => {
   if (!p) return p;
-  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, notice, noticeAt, ...rest } = p;
+  // eslint-disable-next-line no-unused-vars -- private fields are stripped on purpose
+  const { verificationSelfie, likesNewUsers, bot, staff, answers, qotdDay, lastName, notice, noticeAt, termsVersion, termsAcceptedAt, sensitiveConsentAt, verificationRequestedAt, verificationStatus, paused, onboarded, ...rest } = p;
   const me = meId && db.profiles[meId];
   // Members only ever see each other's username — first and last name stay private.
   return { ...rest, name: p.username || p.name, q: me?.answers && answers ? qMatch(me.answers, answers) : null };
@@ -135,7 +137,7 @@ export const demo = {
   // ---------- Auth ----------
   async usernameAvailable(u) {
     load(); u = String(u || '').trim().toLowerCase();
-    return !Object.values(db.profiles).some(p => (p.username || '').toLowerCase() === u);
+    return USERNAME_RE.test(u) && !isReservedUsername(u) && !Object.values(db.profiles).some(p => (p.username || '').toLowerCase() === u);
   },
   async signUp({ email, password, dob, gender, firstName, lastName, username, country, city, lat, lng, termsVersion, sensitiveConsent }) {
     load();
@@ -368,10 +370,11 @@ export const demo = {
   },
   async messages(matchId) {
     const u = requireUser();
-    const m = db.matches.find(x => x.id === matchId && (x.a === u.id || x.b === u.id));
+    const m = db.matches.find(x => x.id === matchId && (x.a === u.id || x.b === u.id) && !x.unmatched);
     if (!m) throw new Error('Conversation not found.');
-    m['read_' + u.id] = new Date().toISOString(); save();
     const other = m.a === u.id ? m.b : m.a;
+    if (db.blocks.some(b => (b.by === u.id && b.target === other) || (b.by === other && b.target === u.id))) throw new Error('Conversation not found.');
+    m['read_' + u.id] = new Date().toISOString(); save();
     return { items: db.messages.filter(x => x.matchId === matchId).map(x => ({ kind: 'text', ...x })), otherReadAt: m['read_' + other] || null };
   },
   async extendMatch(matchId) {
@@ -417,16 +420,32 @@ export const demo = {
   async unmatch(matchId) {
     const u = requireUser();
     const m = db.matches.find(x => x.id === matchId && (x.a === u.id || x.b === u.id));
-    if (m) { m.unmatched = true; save(); }
+    if (!m) return;
+    m.unmatched = true;
+    // My like becomes a pass, so the other person can't bring the match back by liking again.
+    const other = m.a === u.id ? m.b : m.a;
+    db.swipes = db.swipes.filter(s => !(s.from === u.id && s.to === other));
+    db.swipes.push({ from: u.id, to: other, kind: 'pass', at: new Date().toISOString() });
+    save();
   },
   async report(targetId, reason, details = '', messageId = null) {
     const u = requireUser();
-    db.reports.unshift({ id: uid(), by: u.id, target: targetId, reason, details: String(details).slice(0, 1000), messageId, status: 'open', at: new Date().toISOString() });
+    reason = String(reason || '').trim().slice(0, 80); details = String(details || '').slice(0, 1000);
+    if (targetId === u.id) throw new Error('You cannot report yourself.');
+    if (!reason) throw new Error('Choose a reason for the report.');
+    if (!db.profiles[targetId]) throw new Error('This profile is no longer available.');
+    // A repeat report about the same member while the first is still open updates it.
+    const open = db.reports.find(r => r.by === u.id && r.target === targetId && r.status === 'open');
+    if (open) Object.assign(open, { reason, details: details || open.details, messageId: messageId || open.messageId });
+    else db.reports.unshift({ id: uid(), by: u.id, target: targetId, reason, details, messageId, status: 'open', at: new Date().toISOString() });
     save();
   },
   async block(targetId) {
     const u = requireUser();
+    if (targetId === u.id) return;
+    if (!db.profiles[targetId]) throw new Error('This profile is no longer available.');
     if (!db.blocks.some(b => b.by === u.id && b.target === targetId)) db.blocks.push({ by: u.id, target: targetId, at: new Date().toISOString() });
+    db.swipes.filter(s => s.from === u.id && s.to === targetId).forEach(s => Object.assign(s, { kind: 'pass', comment: '', ref: '', at: new Date().toISOString() }));
     db.matches.filter(m => (m.a === u.id && m.b === targetId) || (m.b === u.id && m.a === targetId)).forEach(m => m.unmatched = true);
     save();
   },
@@ -597,7 +616,7 @@ export const demo = {
       const openR = db.reports.filter(r => r.status === 'open'), pend = profs.filter(p => p.verificationStatus === 'pending'), flags = db.messages.filter(m => m.flagged?.length && !m.cleared);
       const bytes = (() => { try { return new Blob([localStorage.getItem('slc_db_v2') || '']).size; } catch { return 0; } })();
       return {
-        schema: 16, now: new Date().toISOString(),
+        schema: 17, now: new Date().toISOString(),
         consent: { missing: members.filter(p => !p.bot && (!p.termsAcceptedAt || !p.sensitiveConsentAt)).length, bannedEmailHashes: (db.bannedEmails || []).length }, dbSize: bytes, settings: { ...db.settings }, demo: true,
         tables: { profiles: profs.length, swipes: db.swipes.length, matches: db.matches.length, messages: db.messages.length, answers: members.reduce((n, p) => n + Object.keys(p.answers || {}).length, 0), reports: db.reports.length, blocks: db.blocks.length, audit_log: db.audit.length, client_errors: errs.length },
         storage: [{ bucket: 'photos (in browser)', files: members.reduce((n, p) => n + (p.photos || []).length, 0), bytes }],

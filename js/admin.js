@@ -6,7 +6,7 @@ import { flagOf, intentById, DEFAULT_SETTINGS } from './constants.js';
 import { CONFIG } from './config.js';
 import { installErrorReporting } from './errors.js';
 
-const EXPECTED_SCHEMA = 16; // bump with every database migration the console depends on
+const EXPECTED_SCHEMA = 17; // bump with every database migration the console depends on
 
 const CONSOLE = document.body.dataset.console; // 'admin' | 'superadmin'
 const bg = u => `background-image:url("${safeImg(u).replace(/["'()\\\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))}")`;

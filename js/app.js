@@ -1,18 +1,18 @@
 // Sierra Leone Connect — member app
 import { getApi } from './data/index.js';
-import { $, $$, h, raw, esc, safeImg, ageOf, timeAgo, isOnline, fmtKm, toast, resizeImage, todayKey, scamCheck } from './util.js';
+import { $, $$, h, raw, esc, safeImg, ageOf, timeAgo, isOnline, fmtKm, toast, resizeImage, todayKey, scamCheck, store } from './util.js';
 import { DISTRICTS, HERITAGE, FAITHS, LANGUAGES, INTENTS, intentById, INTERESTS, PROMPTS, CITIES, flagOf, REPORT_REASONS, DECK_MODES, ICEBREAKERS, QUESTIONS, Q_CATS, IMPORTANCE, qById, THIS_OR_THAT } from './constants.js';
-import { rankDeck, score, completeness, openers, defaultPrefs, fullPrefs } from './match.js';
+import { rankDeck, score, completeness, openers, fullPrefs } from './match.js';
 import { I } from './icons.js';
 import { COUNTRIES } from './geo-data.js';
-import { detectLocation, USERNAME_RE, normalizeUsername } from './geo.js';
+import { detectLocation, USERNAME_RE, normalizeUsername, isReservedUsername } from './geo.js';
 import { debounce } from './util.js';
 import { CONFIG } from './config.js';
 import { TERMS_VERSION } from './constants.js';
 import { installErrorReporting } from './errors.js';
 
-let api, session, me, settings, autoLocateRef = () => {};
-const S = { mode: localStorage.getItem('slc_mode') || 'worldwide', deck: [], deckLoaded: false, lastSwiped: null, likes: [], matches: [], unread: 0, likeCount: 0, chatUnsub: null };
+let api, session, me, settings;
+const S = { mode: store.get('slc_mode') || 'worldwide', deck: [], deckLoaded: false, lastSwiped: null, likes: [], matches: [], unread: 0, likeCount: 0, chatUnsub: null };
 
 const bg = u => `background-image:url("${safeImg(u).replace(/["'()\\\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))}")`;
 const photo = p => (p?.photos || [])[0] || '';
@@ -21,7 +21,21 @@ const vbadge = p => p?.verified ? h`<span class="verified" title="Photo verified
 const place = p => h`${flagOf(p.country)} ${p.city || p.country || ''}`;
 
 // ───────────────────────── Boot ─────────────────────────
-boot().catch(e => { console.error(e); document.body.innerHTML = `<p style="padding:24px">Something went wrong loading the app. ${esc(e.message)}</p>`; });
+boot().catch(bootFailed);
+
+// The app couldn't start (usually no connection, or the server is waking up). Offer a retry instead of a dead page.
+function bootFailed(e) {
+  console.error(e);
+  const offline = e?.code === 'offline' || navigator.onLine === false;
+  document.body.classList.remove('in-app');
+  document.body.innerHTML = `<main class="empty" style="padding:22vh 24px 0;max-width:460px;margin:0 auto"><div class="big">${offline ? '📡' : '🛠️'}</div>
+    <h1>${offline ? 'You\'re offline' : 'We couldn\'t load Sierra Leone Connect'}</h1>
+    <p>${offline ? 'Check your internet connection, then try again.' : 'This is usually temporary. Please try again in a moment.'}</p>
+    <button class="btn btn-primary" id="boot-retry" type="button" style="margin-top:14px">Try again</button>
+    <p class="fine" style="margin-top:18px">${esc(e?.message || '')}</p></main>`;
+  document.getElementById('boot-retry').onclick = () => location.reload();
+  if (offline) window.addEventListener('online', () => location.reload(), { once: true });
+}
 
 async function boot() {
   const native = !!window.Capacitor?.isNativePlatform?.();
@@ -31,6 +45,15 @@ async function boot() {
   api = await getApi();
   installErrorReporting(api, 'app');
   api.onRecovery?.(() => { S.recovery = true; if (me) passwordSheet(true); });
+  // Sign-in expired, or the account was banned / suspended / the app went into maintenance while open:
+  // leave the app cleanly (the start-up flow then shows the right message) instead of failing on every tap.
+  api.onSessionLost?.(async kind => {
+    if (!me) return;
+    clearInterval(S.badgeTimer); S.unsubAll?.(); S.chatUnsub?.();
+    if (kind === 'auth') { try { await api.signOut(); } catch { /* already signed out */ } }
+    location.reload();
+  });
+  document.addEventListener('visibilitychange', onVisible);
   settings = await api.settings();
   session = await api.session();
   if (api.mode === 'demo') $('#demo-note').classList.remove('hidden');
@@ -102,7 +125,6 @@ function bindLanding() {
     geoHint.className = 'hint' + (r.country ? ' ok' : '');
     $('#su-geo').onclick = () => autoLocate(true);
   }
-  autoLocateRef = autoLocate;
   $('#su-geo').onclick = () => autoLocate(true);
   sel.onchange = () => { geo.city = ''; geo.lat = geo.lng = null; geoHint.textContent = 'Country set manually.'; geoHint.className = 'hint'; };
 
@@ -115,17 +137,15 @@ function bindLanding() {
   };
   pw1.addEventListener('input', checkPw); pw2.addEventListener('input', checkPw);
   const uIn = $('#form-signup [name=username]'), uHint = $('#su-user-hint');
-  let userOk = false;
   const checkUser = debounce(async () => {
     const u = normalizeUsername(uIn.value);
     if (uIn.value !== u) uIn.value = u;
-    userOk = false;
     if (!u) { uHint.textContent = '3–20 letters, numbers, dots or underscores.'; uHint.className = 'hint'; return; }
     if (!USERNAME_RE.test(u)) { uHint.textContent = 'Use 3–20 letters, numbers, single dots or underscores (not at the start or end).'; uHint.className = 'hint bad'; return; }
+    if (isReservedUsername(u)) { uHint.textContent = `@${u} isn't available — names that look like staff or the app are reserved.`; uHint.className = 'hint bad'; return; }
     try {
       const free = await api.usernameAvailable(u);
       if (normalizeUsername(uIn.value) !== u) return;
-      userOk = free;
       uHint.textContent = free ? `✓ @${u} is available` : `@${u} is taken — try another.`;
       uHint.className = 'hint ' + (free ? 'ok' : 'bad');
     } catch { uHint.textContent = ''; }
@@ -142,6 +162,7 @@ function bindLanding() {
     if (lastName.length < 2) { err.textContent = 'Enter your last name.'; return; }
     if (!['woman', 'man'].includes(gender)) { err.textContent = 'Choose your gender.'; return; }
     if (!USERNAME_RE.test(username)) { err.textContent = 'Choose a valid username.'; return; }
+    if (isReservedUsername(username)) { err.textContent = `@${username} isn't available — try another username.`; return; }
     if (!country) { err.textContent = 'Choose your country.'; return; }
     if (String(f.get('password')).length < 8) { err.textContent = 'Password must be at least 8 characters.'; return; }
     if (f.get('password') !== f.get('password2')) { err.textContent = 'Passwords don\'t match.'; pw2.focus(); return; }
@@ -423,7 +444,7 @@ function shell() {
 }
 
 function route() {
-  S.chatUnsub?.(); S.chatUnsub = null;
+  S.chatUnsub?.(); S.chatUnsub = null; S.chatRefresh = null;
   closeSheet();
   if (S.recovery) setTimeout(() => passwordSheet(true), 0); // finish the password reset first
   else if (me?.notice) setTimeout(showNotice, 0); // shown on every screen until acknowledged
@@ -432,6 +453,17 @@ function route() {
   $('.nav').classList.toggle('hidden', r === 'chat');
   const v = $('#view'); v.scrollTop = 0;
   ({ discover: renderDiscover, likes: renderLikes, chats: renderChats, chat: () => renderChat(decodeURIComponent(arg)), me: renderMe }[r] || renderDiscover)();
+}
+
+// Coming back to the app after a while (phone unlocked, tab re-opened): live updates may have been missed.
+let hiddenAt = 0;
+function onVisible() {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (!me || !hiddenAt || Date.now() - hiddenAt < 20000) return;
+  hiddenAt = 0;
+  if (S.chatRefresh) S.chatRefresh();
+  else if (/^#\/(chats|likes)/.test(location.hash) && !document.querySelector('.sheet')) route();
+  else refreshBadges();
 }
 
 async function refreshBadges() {
@@ -468,7 +500,7 @@ async function renderDiscover() {
       <div class="quota" id="quota"></div>
     </div>`;
   $('#prefs-btn').onclick = prefsSheet;
-  $('.modes').onclick = e => { const b = e.target.closest('[data-mode]'); if (!b) return; S.mode = b.dataset.mode; localStorage.setItem('slc_mode', S.mode); $$('.modes .chip').forEach(c => c.setAttribute('aria-pressed', c === b)); loadDeck(); };
+  $('.modes').onclick = e => { const b = e.target.closest('[data-mode]'); if (!b) return; S.mode = b.dataset.mode; store.set('slc_mode', S.mode); $$('.modes .chip').forEach(c => c.setAttribute('aria-pressed', c === b)); loadDeck(); };
   $('#acts').onclick = e => { const b = e.target.closest('[data-a]'); if (!b) return; b.dataset.a === 'undo' ? undo() : swipeTop(b.dataset.a); };
   document.onkeydown = e => { if (!location.hash.startsWith('#/discover') || $('.sheet.show') || /input|textarea|select/i.test(document.activeElement.tagName)) return; if (e.key === 'ArrowLeft') swipeTop('pass'); if (e.key === 'ArrowRight') swipeTop('like'); if (e.key === 'ArrowUp') swipeTop('super'); };
   await loadDeck();
@@ -516,7 +548,7 @@ function drawDeck() {
   if (!S.deck.length) {
     deck.innerHTML = h`<div class="empty"><div class="pulse"><span style="font-size:40px">🇸🇱</span></div><h2>You've seen everyone for now</h2><p>New people join every day. Try another mode or widen your filters.</p>
       <div class="row" style="max-width:320px;margin:16px auto 0"><button class="btn btn-ghost btn-sm" id="e-world">🌍 Go worldwide</button><button class="btn btn-ghost btn-sm" id="e-prefs">Adjust filters</button></div></div>`;
-    $('#e-world').onclick = () => { S.mode = 'worldwide'; localStorage.setItem('slc_mode', S.mode); renderDiscover(); };
+    $('#e-world').onclick = () => { S.mode = 'worldwide'; store.set('slc_mode', S.mode); renderDiscover(); };
     $('#e-prefs').onclick = prefsSheet;
     return;
   }
@@ -829,7 +861,7 @@ async function renderLikes(tab = S.likesTab || 'liked') {
           <div class="t">${p.comment && !locked ? h`<div class="cmt">💬 ${p.comment}</div>` : ''}<b>${p.name}, ${ageOf(p.dob)} ${vbadge(p)}</b><span>${place(p)}</span></div></button>`)}</div>`;
       if (!locked) $$('.tile', el).forEach(t => t.onclick = () => openProfile(likes.find(x => x.id === t.dataset.id), { actions: true, fromLikes: true }));
     } else {
-      const { candidates, likedMe } = await api.deck('worldwide');
+      const { candidates } = await api.deck('worldwide');
       const picks = rankDeck(me, candidates, new Set(), Number(todayKey().replace(/-/g, ''))).sort((a, b) => b._score - a._score).slice(0, 6);
       if (!picks.length) { el.innerHTML = h`<div class="empty"><div class="big">⭐</div><h2>No picks right now</h2><p>Check back tomorrow for fresh top picks.</p></div>`; return; }
       el.innerHTML = h`<p style="color:var(--muted);margin:0 0 12px">Your highest Connect Scores today, refreshed every morning.</p>
@@ -968,6 +1000,7 @@ async function renderChat(id) {
       ${pool.map(p => h`<button class="opener" style="background:var(--card);border-color:var(--line)" data-a="${p[0]}" data-b="${p[1]}">${p[0]} <span style="color:var(--muted)">or</span> ${p[1]}?</button>`)}</div>`);
     $$('[data-a]', sh).forEach(b => b.onclick = async () => { closeSheet(); try { push(await api.send(id, '', { kind: 'game', meta: { a: b.dataset.a, b: b.dataset.b } })); } catch (x) { toast(x.message, 'error'); } });
   };
+  S.chatRefresh = async () => { await load(); if (box.isConnected) draw(); };
   S.chatUnsub = api.subscribe(id, async ev => {
     if (ev.type === 'typing') { if (ev.from === me.id) return; typingUntil = Date.now() + 3500; draw(); clearTimeout(typingTimer); typingTimer = setTimeout(draw, 3600); return; }
     if (ev.type === 'read') { otherReadAt = ev.at; draw(); return; }
